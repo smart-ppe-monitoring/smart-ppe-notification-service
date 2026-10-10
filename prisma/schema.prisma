@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./node_modules/@prisma/client-notification"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("NOTIFICATION_DATABASE_URL")
+}
+
+model Notification {
+  id         String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  incidentId String?   @map("incident_id") @db.Uuid
+  templateId String?   @map("template_id") @db.Uuid
+  channel    String    @db.VarChar(30)
+  title      String    @db.VarChar(255)
+  content    String    @db.Text
+  severity   String    @default("NORMAL") @db.VarChar(30)
+  status     String    @default("PENDING") @db.VarChar(30)
+  sentAt     DateTime? @map("sent_at")
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  template NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  logs     NotificationLog[]
+
+  @@index([userId, status])
+  @@index([incidentId])
+  @@map("notifications")
+}
+
+model NotificationTemplate {
+  id              String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  code            String   @unique @db.VarChar(50)
+  name            String   @db.VarChar(150)
+  channel         String   @db.VarChar(30)
+  subjectTemplate String?  @map("subject_template") @db.Text
+  contentTemplate String   @map("content_template") @db.Text
+  status          String   @default("ACTIVE") @db.VarChar(30)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  notifications Notification[]
+
+  @@map("notification_templates")
+}
+
+model NotificationPreference {
+  id                String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  channel           String   @db.VarChar(30)
+  enabled           Boolean  @default(true)
+  severityThreshold String   @default("LOW") @map("severity_threshold") @db.VarChar(30)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, channel])
+  @@map("notification_preferences")
+}
+
+model NotificationLog {
+  id             String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  notificationId String    @map("notification_id") @db.Uuid
+  status         String    @db.VarChar(30)
+  attempt        Int       @default(1)
+  errorMessage   String?   @map("error_message") @db.Text
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId])
+  @@map("notification_logs")
+}
