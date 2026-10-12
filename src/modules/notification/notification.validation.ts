@@ -22,6 +22,7 @@ export const listNotificationsSchema = z.object({
     .optional(),
   incidentId: z.string().uuid("Invalid incident ID").optional(),
   type: z.string().optional(),
+  search: z.string().trim().max(200).optional(),
   fromDate: z.string().datetime({ offset: true }).optional(),
   toDate: z.string().datetime({ offset: true }).optional(),
 });
@@ -168,9 +169,7 @@ export const createNotificationTemplateSchema = z.object({
     .enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"])
     .default("IN_APP"),
   subjectTemplate: z.string().nullable().optional(),
-  contentTemplate: z
-    .string()
-    .min(1, "contentTemplate is required"),
+  contentTemplate: z.string().min(1, "contentTemplate cannot be empty").optional(),
   status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
   // Các trường tương thích ngược
   description: z.string().max(500).optional(),
@@ -182,7 +181,13 @@ export const createNotificationTemplateSchema = z.object({
   content: z.string().optional(),
   variables: z.array(z.string()).default([]),
   isActive: z.boolean().default(true),
-});
+}).refine(
+  (data) => Boolean(data.contentTemplate || data.content),
+  {
+    message: "Either contentTemplate or content must be provided",
+    path: ["contentTemplate"],
+  },
+);
 
 export const updateNotificationTemplateSchema = z.object({
   name: z.string().min(1, "Name is required").max(255).optional(),
