@@ -8,7 +8,6 @@ import {
   authMiddleware,
 } from "../src/middlewares/auth.middleware";
 import { jwtConfig } from "../src/config/jwt.config";
-import { permissionCacheService } from "../src/common/services/permission-cache.service";
 import { AppError } from "../src/common/errors/app-error";
 
 function createMockResponse() {
@@ -191,17 +190,6 @@ describe("Server-Sent Events (SSE) Real-Time Push Module", () => {
   });
 
   it("8. should authenticate SSE stream with short-lived SSE ticket and reject ticket on other routes (F-01)", async () => {
-    (permissionCacheService as any).userCache.set("user-sse-1", {
-      user: {
-        id: "user-sse-1",
-        isActive: true,
-        deletedAt: null,
-        roleId: "role-1",
-        roleName: "USER",
-      },
-      expiresAt: Date.now() + 60000,
-    });
-
     const ticket = jwt.sign(
       {
         id: "user-sse-1",

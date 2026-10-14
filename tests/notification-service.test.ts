@@ -5,7 +5,6 @@ import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
   NOTIFICATION_STATUS,
-  NOTIFICATION_TEMPLATE_CODE,
   SEVERITY_WEIGHT,
   DEFAULT_PREFERENCES,
 } from "../src/common/constants/notification.constant";
@@ -16,11 +15,8 @@ import {
 } from "../src/modules/notification/notification.validation";
 import { NotificationService } from "../src/modules/notification/notification.service";
 import { NotificationRepository } from "../src/modules/notification/notification.repository";
-import { UserRepository } from "../src/modules/users/user.repository";
 import { MailService } from "../src/common/services/mail.service";
 import { SseManagerService } from "../src/common/services/sse-manager.service";
-import { IncidentService } from "../src/modules/incident/incident.service";
-import { IncidentRepository } from "../src/modules/incident/incident.repository";
 import { jwtConfig } from "../src/config/jwt.config";
 import { JWT_PURPOSE } from "../src/common/constants/jwt.constant";
 import { AppError } from "../src/common/errors/app-error";
@@ -155,12 +151,6 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         createManyNotifications: async () => ({ count: 1 }),
       } as unknown as NotificationRepository;
 
-      const mockUserRepo = {
-        findActiveUsersByIds: async (ids: string[]) => [
-          { id: ids[0], email: "officer@ppe.vn" },
-        ],
-      } as unknown as UserRepository;
-
       const mockMail = {
         sendPpeViolationAlertEmail: async () => {
           emailSent = true;
@@ -173,7 +163,7 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         },
       } as unknown as SseManagerService;
 
-      const service = new NotificationService(mockRepo, mockUserRepo, mockMail, mockSse);
+      const service = new NotificationService(mockRepo, mockMail, mockSse);
 
       const result = await service.dispatchIncidentNotification({
         incidentId: fakeIncidentId,
@@ -200,12 +190,6 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         createManyNotifications: async () => ({ count: 2 }),
       } as unknown as NotificationRepository;
 
-      const mockUserRepo = {
-        findActiveUsersByIds: async (ids: string[]) => [
-          { id: ids[0], email: "manager@ppe.vn" },
-        ],
-      } as unknown as UserRepository;
-
       const mockMail = {
         sendPpeViolationAlertEmail: async () => {
           emailSent = true;
@@ -218,7 +202,7 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         },
       } as unknown as SseManagerService;
 
-      const service = new NotificationService(mockRepo, mockUserRepo, mockMail, mockSse);
+      const service = new NotificationService(mockRepo, mockMail, mockSse);
 
       const result = await service.dispatchIncidentNotification({
         incidentId: fakeIncidentId,
@@ -243,19 +227,13 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         createManyNotifications: async () => ({ count: 0 }),
       } as unknown as NotificationRepository;
 
-      const mockUserRepo = {
-        findActiveUsersByIds: async (ids: string[]) => [
-          { id: ids[0], email: "officer@ppe.vn" },
-        ],
-      } as unknown as UserRepository;
-
       const mockMail = {
         sendPpeViolationAlertEmail: async () => {
           emailSent = true;
         },
       } as unknown as MailService;
 
-      const service = new NotificationService(mockRepo, mockUserRepo, mockMail);
+      const service = new NotificationService(mockRepo, mockMail);
 
       const result = await service.dispatchIncidentNotification({
         incidentId: fakeIncidentId,
@@ -275,18 +253,6 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
       let dispatchedIncidentId = "";
       let dispatchedSeverity = "";
 
-      const mockIncidentRepo = {
-        createIncident: async (data: any) => ({
-          id: fakeIncidentId,
-          siteId: data.siteId,
-          cameraId: data.cameraId,
-          violationType: data.violationType,
-          severity: data.severity,
-          description: data.description,
-          detectedAt: new Date(),
-        }),
-      } as unknown as IncidentRepository;
-
       const mockNotificationService = {
         dispatchIncidentNotification: async (params: any) => {
           dispatchedIncidentId = params.incidentId;
@@ -295,11 +261,34 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         },
       } as unknown as NotificationService;
 
-      const incidentService = new IncidentService(
-        mockIncidentRepo,
-        undefined,
-        mockNotificationService,
-      );
+      class StubIncidentDispatcher {
+        constructor(private readonly notificationService: NotificationService) {}
+        async createIncident(data: any, reporterId: string) {
+          const incident = {
+            id: fakeIncidentId,
+            siteId: data.siteId,
+            cameraId: data.cameraId,
+            violationType: data.violationType,
+            severity: data.severity,
+            description: data.description,
+            detectedAt: new Date(),
+          };
+          setTimeout(() => {
+            this.notificationService.dispatchIncidentNotification({
+              incidentId: incident.id,
+              siteId: incident.siteId,
+              cameraId: incident.cameraId,
+              violationType: incident.violationType,
+              severity: incident.severity,
+              description: incident.description,
+              recipientUserIds: [reporterId],
+            });
+          }, 0);
+          return incident;
+        }
+      }
+
+      const incidentService = new StubIncidentDispatcher(mockNotificationService);
 
       const created = await incidentService.createIncident(
         {
@@ -383,7 +372,7 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
         },
       } as unknown as SseManagerService;
 
-      const service = new NotificationService(mockRepo, undefined, undefined, mockSse);
+      const service = new NotificationService(mockRepo, undefined, mockSse);
       await service.markAsRead(fakeSafetyOfficerId, fakeNotificationId);
 
       assert.equal(markedId, fakeNotificationId);

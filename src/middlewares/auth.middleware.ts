@@ -58,20 +58,44 @@ export async function authMiddleware(
     return;
   }
 
+  const isStreamPath = cleanPath.endsWith("/stream");
+
   try {
     let payload: any;
-    try {
+    if (isStreamPath && jwtConfig.tempSecret) {
+      try {
+        payload = jwt.verify(token, jwtConfig.tempSecret, {
+          algorithms: [JWT_ALGORITHM.HS256],
+        });
+      } catch {
+        // Fallback to standard token verification below
+      }
+    }
+
+    if (!payload) {
       const secret = jwtConfig.publicKey || jwtConfig.accessSecret;
       payload = jwt.verify(token, secret, {
         algorithms: [JWT_ALGORITHM.RS256, JWT_ALGORITHM.HS256],
-      });
-    } catch {
-      // Cho phép giải mã payload trực tiếp nếu chạy dev hoặc token ký từ Identity
-      payload = jwt.decode(token);
+      }) as any;
     }
 
     if (!payload || typeof payload !== "object") {
       next(new AppError("Token không hợp lệ", 401, ERROR_CODE.UNAUTHORIZED));
+      return;
+    }
+
+    // SEC: Token SSE ticket chỉ được dùng cho /stream, tuyệt đối không được dùng cho route khác
+    if (
+      payload.purpose === JWT_PURPOSE.SSE_STREAM_TICKET &&
+      !isStreamPath
+    ) {
+      next(
+        new AppError(
+          "SSE Stream Ticket chỉ dùng cho kết nối SSE stream",
+          401,
+          ERROR_CODE.UNAUTHORIZED,
+        ),
+      );
       return;
     }
 
@@ -85,6 +109,10 @@ export async function authMiddleware(
 
     next();
   } catch (error) {
+    if (error instanceof AppError) {
+      next(error);
+      return;
+    }
     next(new AppError("Token xác thực không hợp lệ hoặc đã hết hạn", 401, ERROR_CODE.UNAUTHORIZED));
   }
 }
