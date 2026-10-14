@@ -12,6 +12,11 @@ import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
+import { buildOpenApiSpec } from "./config/openapi/openapi.registry";
+import { registerNotificationOpenApi } from "./modules/notification/notification.openapi";
+
+// Khởi tạo các định nghĩa OpenAPI
+registerNotificationOpenApi();
 
 /**
  * Express Application cho Notification Microservice (Phase 5: First Satellite Service)
@@ -92,6 +97,10 @@ const healthHandler = (_req: express.Request, res: express.Response) => {
 notificationApp.get("/health", healthHandler);
 notificationApp.get("/api/v1/notifications/health", healthHandler);
 notificationApp.get("/notifications/health", healthHandler);
+
+// 3.1 OpenAPI Specification Endpoint
+notificationApp.get("/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+notificationApp.get("/api/v1/notifications/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
 
 // 4. Mount Notification Routes (dual-mount hỗ trợ cả prefix /api/v1/notifications và /notifications)
 notificationApp.use(
