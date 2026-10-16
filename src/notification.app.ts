@@ -98,9 +98,11 @@ notificationApp.get("/health", healthHandler);
 notificationApp.get("/api/v1/notifications/health", healthHandler);
 notificationApp.get("/notifications/health", healthHandler);
 
-// 3.1 OpenAPI Specification Endpoint
-notificationApp.get("/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
-notificationApp.get("/api/v1/notifications/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+// 3.1 OpenAPI Specification Endpoint (Chỉ mở trên dev/staging, ẩn trên production)
+if (envConfig.nodeEnv !== "production") {
+  notificationApp.get("/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+  notificationApp.get("/api/v1/notifications/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+}
 
 // 4. Mount Notification Routes (dual-mount hỗ trợ cả prefix /api/v1/notifications và /notifications)
 notificationApp.use(
