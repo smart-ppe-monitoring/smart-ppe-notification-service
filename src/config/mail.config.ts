@@ -2,13 +2,15 @@ import { envConfig } from "./env.config";
 
 export const mailConfig = {
   get appUrl(): string {
-    const custom = process.env.APP_URL || envConfig.appUrl;
+    if (process.env.APP_URL) {
+      return process.env.APP_URL.replace(/\/+$/, "");
+    }
     const renderUrl =
       process.env.RENDER_EXTERNAL_URL || envConfig.renderExternalUrl;
-    if (renderUrl && (!custom || custom.includes("localhost"))) {
+    if (renderUrl) {
       return renderUrl.replace(/\/+$/, "");
     }
-    return (custom || "http://localhost:7777").replace(/\/+$/, "");
+    return (envConfig.appUrl || "http://localhost:3000").replace(/\/+$/, "");
   },
   host: envConfig.mail.host,
   port: envConfig.mail.port,
@@ -19,10 +21,13 @@ export const mailConfig = {
   },
   from: envConfig.mail.from,
   get verificationUrl(): string {
-    return `${this.appUrl}/api/v1/auth/verify-email`;
+    return `${this.appUrl}/verify-email`;
   },
   get resetPasswordUrl(): string {
-    return `${this.appUrl}/api/v1/auth/reset-password`;
+    return `${this.appUrl}/reset-password`;
+  },
+  get deactivationUrl(): string {
+    return `${this.appUrl}/deactivate`;
   },
   get resendApiKey(): string {
     return process.env.RESEND_API_KEY || envConfig.mail.resendApiKey;

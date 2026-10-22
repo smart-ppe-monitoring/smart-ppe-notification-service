@@ -362,7 +362,7 @@ export class MailService {
     token: string,
     fullName?: string,
   ) {
-    const deactivationUrl = `${mailConfig.verificationUrl}/deactivate?token=${token}`;
+    const deactivationUrl = `${mailConfig.deactivationUrl}?token=${token}`;
     const safeFullName = escapeHtml(fullName) || "bạn";
     const mailOptions: SendMailOptions = {
       from: mailConfig.from,

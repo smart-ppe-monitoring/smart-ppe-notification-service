@@ -150,7 +150,7 @@ const envSchema = z
     GOOGLE_OAUTH_ALLOWED_REDIRECT_URIS: z.string().default(""),
 
     // ── Application Base URL & Cloud Deployment ───────────────────────────────
-    APP_URL: z.string().default("http://localhost:7777"),
+    APP_URL: z.string().default("http://localhost:3000"),
     /** Domain công khai tự động gán bởi Render (vd: https://my-app.onrender.com) */
     RENDER_EXTERNAL_URL: z.string().default(""),
 
