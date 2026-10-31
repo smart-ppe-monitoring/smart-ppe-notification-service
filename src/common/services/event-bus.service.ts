@@ -291,7 +291,7 @@ export class EventBusService {
    */
   public async dispatchDirectly(envelope: EventEnvelope): Promise<void> {
     // 1. Kiểm tra tính Idempotent: Nếu eventId đã được xử lý trong vòng 24h thì bỏ qua
-    if (this.isEventAlreadyProcessed(envelope.id)) {
+    if (await this.isEventAlreadyProcessed(envelope.id)) {
       console.log(
         `[EventBus] ⏭️ Duplicate event ${envelope.id} skipped (Idempotent protection)`,
       );
@@ -301,7 +301,7 @@ export class EventBusService {
     const handlers = this.handlers.get(envelope.name);
     if (!handlers || handlers.size === 0) {
       // Không có consumer đăng ký cho topic này
-      this.markEventProcessed(envelope.id);
+      await this.markEventProcessed(envelope.id);
       return;
     }
 
@@ -313,13 +313,25 @@ export class EventBusService {
     await Promise.all(handlerPromises);
 
     // 3. Đánh dấu đã xử lý thành công
-    this.markEventProcessed(envelope.id);
+    await this.markEventProcessed(envelope.id);
   }
 
   /**
    * Kiểm tra xem sự kiện đã từng được xử lý chưa (Idempotency Check)
+   * Kết hợp Redis phân tán (multi-pod) và In-Memory cache fallback (SEC-18).
    */
-  public isEventAlreadyProcessed(eventId: string): boolean {
+  public async isEventAlreadyProcessed(eventId: string): Promise<boolean> {
+    // 1. Kiểm tra Redis phân tán cho cụm multi-pod / replicas
+    if (this.isRedisAvailable && this.redisConnection) {
+      try {
+        const cached = await this.redisConnection.get(`idempotency:event:${eventId}`);
+        if (cached) return true;
+      } catch {
+        // Fallback sang in-memory nếu Redis trục trặc
+      }
+    }
+
+    // 2. Fallback sang In-Memory Cache
     const expiresAt = this.processedEventIds.get(eventId);
     if (!expiresAt) return false;
     if (Date.now() > expiresAt) {
@@ -329,8 +341,22 @@ export class EventBusService {
     return true;
   }
 
-  public markEventProcessed(eventId: string): void {
-    // Giới hạn bộ nhớ đệm tối đa 10.000 events
+  public async markEventProcessed(eventId: string): Promise<void> {
+    // 1. Ghi nhận vào Redis phân tán với TTL 24 giờ (SEC-18)
+    if (this.isRedisAvailable && this.redisConnection) {
+      try {
+        await this.redisConnection.set(
+          `idempotency:event:${eventId}`,
+          "1",
+          "EX",
+          Math.floor(EVENT_BUS_CONSTANTS.IDEMPOTENCY_TTL_MS / 1000),
+        );
+      } catch {
+        // Fallback
+      }
+    }
+
+    // 2. Ghi nhận vào In-Memory Cache
     if (this.processedEventIds.size >= 10000) {
       const now = Date.now();
       for (const [k, exp] of this.processedEventIds.entries()) {

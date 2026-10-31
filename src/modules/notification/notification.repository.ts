@@ -18,6 +18,8 @@ import {
   formatPaginationMeta,
 } from "../../common/helpers/pagination.helper";
 import { isUuid } from "../../common/helpers/uuid.helper";
+import { eventBus } from "../../common/services/event-bus.service";
+import { EVENT_NAMES } from "../../common/constants/event.constant";
 import {
   ListNotificationsDto,
   ListEmailsDto,
@@ -565,8 +567,34 @@ export class NotificationRepository {
     userAgent?: string;
   }) {
     if (!params.actorId || !isUuid(params.actorId)) return null;
+
+    try {
+      await eventBus.publish(
+        EVENT_NAMES.AUDIT_ACTION_CREATED,
+        {
+          userId: params.actorId,
+          action: params.action,
+          targetType: params.targetType,
+          targetId: params.targetId || null,
+          details: params.details || {},
+          ipAddress: params.ipAddress,
+          userAgent: params.userAgent,
+          timestamp: new Date().toISOString(),
+        },
+        { useOutbox: false },
+      );
+    } catch (err: any) {
+      console.warn(`[AuditLog] Failed to publish audit event:`, err?.message || err);
+    }
+
     console.log(`[AuditLog] ${params.action} on ${params.targetType}:${params.targetId}`);
-    return null;
+    return {
+      actorId: params.actorId,
+      action: params.action,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      timestamp: new Date(),
+    };
   }
 }
 

@@ -21,6 +21,9 @@ export const EVENT_NAMES = {
   PPE_INCIDENT_RESOLVED: "ppe.incident.resolved",
   PPE_CAMERA_STATUS_CHANGED: "ppe.camera.status_changed",
   PPE_SITE_ALERT_TRIGGERED: "ppe.site.alert_triggered",
+
+  // Audit Events
+  AUDIT_ACTION_CREATED: "audit.action.created",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

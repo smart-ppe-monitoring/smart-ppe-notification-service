@@ -110,7 +110,8 @@ export class NotificationService {
     const severityWeight = SEVERITY_WEIGHT[severity] || 2;
 
     // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
-    const recipientIds = dto.recipientUserIds || [];
+    // SEC-21: Loại bỏ các ID trùng lặp để ngăn chặn Resource Flooding & Notification Bombing
+    const recipientIds = Array.from(new Set(dto.recipientUserIds || []));
 
     if (recipientIds.length === 0) {
       return {
@@ -422,9 +423,13 @@ export class NotificationService {
 
     const title = (rawTitle || "").length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
 
+    // SEC-21: Deduplicate userIds & channels để chống Notification Bombing
+    const uniqueUserIds = Array.from(new Set(userIds || []));
+    const uniqueChannels = Array.from(new Set(channels || []));
+
     const records = [];
-    for (const userId of userIds) {
-      for (const channel of channels) {
+    for (const userId of uniqueUserIds) {
+      for (const channel of uniqueChannels) {
         records.push({
           userId,
           incidentId: incidentId || null,
@@ -442,8 +447,8 @@ export class NotificationService {
     if (records.length > 0) {
       await this.repository.createManyNotifications(records);
 
-      if (channels.includes(NOTIFICATION_CHANNEL.IN_APP) || channels.includes(NOTIFICATION_CHANNEL.WEB)) {
-        for (const userId of userIds) {
+      if (uniqueChannels.includes(NOTIFICATION_CHANNEL.IN_APP) || uniqueChannels.includes(NOTIFICATION_CHANNEL.WEB)) {
+        for (const userId of uniqueUserIds) {
           this.sse.sendToUser(userId, {
             type: "notification:new",
             data: {
