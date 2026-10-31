@@ -14,6 +14,7 @@ export interface ListNotificationsDto {
   channel?: string;
   incidentId?: string;
   type?: string;
+  search?: string;
   fromDate?: string;
   toDate?: string;
 }

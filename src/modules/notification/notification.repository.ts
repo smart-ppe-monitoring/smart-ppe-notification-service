@@ -52,14 +52,51 @@ export class NotificationRepository {
   // ─────────────────────────────────────────────
 
   async findMany(userId: string, dto: ListNotificationsDto) {
-    const { isRead, status, severity, channel, incidentId, fromDate, toDate } = dto;
+    const { isRead, status, severity, channel, incidentId, type, search, fromDate, toDate } = dto;
     const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
 
+    // SEC-41: Loại bỏ các thông báo đã bị soft delete (deletedAt !== null)
+    // SEC-38: Tích hợp đầy đủ bộ lọc tìm kiếm search (title, content) và type (ALERT, NOTIFICATION, template code)
+    const andConditions: NotificationPrisma.NotificationWhereInput[] = [
+      {
+        OR: [
+          { userId },
+          { userId: SYSTEM_BROADCAST_USER_ID },
+        ],
+      },
+      { deletedAt: null },
+    ];
+
+    if (search) {
+      andConditions.push({
+        OR: [
+          { title: { contains: search, mode: "insensitive" } },
+          { content: { contains: search, mode: "insensitive" } },
+        ],
+      });
+    }
+
+    if (type) {
+      if (type.toUpperCase() === "ALERT") {
+        andConditions.push({
+          severity: { in: [NOTIFICATION_SEVERITY.HIGH, NOTIFICATION_SEVERITY.CRITICAL] },
+        });
+      } else if (type.toUpperCase() === "NOTIFICATION") {
+        andConditions.push({
+          severity: { in: [NOTIFICATION_SEVERITY.LOW, NOTIFICATION_SEVERITY.NORMAL, NOTIFICATION_SEVERITY.MEDIUM] },
+        });
+      } else {
+        andConditions.push({
+          OR: [
+            { severity: type },
+            { template: { code: type } },
+          ],
+        });
+      }
+    }
+
     const where: NotificationPrisma.NotificationWhereInput = {
-      OR: [
-        { userId },
-        { userId: SYSTEM_BROADCAST_USER_ID },
-      ],
+      AND: andConditions,
     };
 
     if (isRead !== undefined) {
@@ -139,13 +176,14 @@ export class NotificationRepository {
     return this.db.notification.count({
       where: {
         userId,
+        deletedAt: null,
         status: { not: NOTIFICATION_STATUS.READ },
       },
     });
   }
 
   async findOne(id: string, userId?: string) {
-    const where: NotificationPrisma.NotificationWhereInput = { id };
+    const where: NotificationPrisma.NotificationWhereInput = { id, deletedAt: null };
     if (userId) {
       where.userId = userId;
     }
@@ -166,7 +204,8 @@ export class NotificationRepository {
       where: {
         id,
         userId,
-        status: { not: NOTIFICATION_STATUS.READ },
+        deletedAt: null,
+        status: { in: [NOTIFICATION_STATUS.SENT, "DELIVERED"] },
       },
       data: {
         status: NOTIFICATION_STATUS.READ,
@@ -175,11 +214,13 @@ export class NotificationRepository {
     });
   }
 
+  // SEC-40: Chỉ chuyển trạng thái SENT / DELIVERED sang READ; không ghi đè trạng thái FAILED và PENDING
   async markAllAsRead(userId: string) {
     return this.db.notification.updateMany({
       where: {
         userId,
-        status: { not: NOTIFICATION_STATUS.READ },
+        deletedAt: null,
+        status: { in: [NOTIFICATION_STATUS.SENT, "DELIVERED"] },
       },
       data: {
         status: NOTIFICATION_STATUS.READ,
@@ -188,9 +229,13 @@ export class NotificationRepository {
     });
   }
 
+  // SEC-41: Áp dụng Soft Delete để bảo tồn dữ liệu và ngăn chặn việc xóa lan truyền (Cascade Delete) làm mất nhật ký phân phát
   async delete(id: string, userId: string) {
-    return this.db.notification.deleteMany({
-      where: { id, userId },
+    return this.db.notification.updateMany({
+      where: { id, userId, deletedAt: null },
+      data: {
+        deletedAt: new Date(),
+      },
     });
   }
 
