@@ -38,6 +38,7 @@ import {
   DEFAULT_EMAIL_SUBJECTS,
   EMAIL_STATUS,
   EMAIL_TEMPLATE_KEY,
+  SYSTEM_BROADCAST_USER_ID,
   NotificationChannel,
   NotificationSeverity,
 } from "../../common/constants/notification.constant";
@@ -463,6 +464,40 @@ export class NotificationService {
     dto: BroadcastNotificationDto,
   ): Promise<{ totalRecipients: number }> {
     const safeTitle = (dto.title || "").length > 255 ? dto.title.slice(0, 252) + "..." : dto.title;
+
+    // SEC-15: Lưu trữ thông báo broadcast vào CSDL PostgreSQL để người dùng offline khi đăng nhập vẫn nhận được
+    const userIds = await this.repository.findDistinctUserIds();
+    const recipientUserIds = userIds.length > 0 ? userIds : [SYSTEM_BROADCAST_USER_ID];
+
+    const records = recipientUserIds.map((uid) => ({
+      userId: uid,
+      incidentId: null,
+      templateId: null,
+      channel: NOTIFICATION_CHANNEL.IN_APP,
+      title: safeTitle,
+      content: dto.content,
+      severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
+      status: NOTIFICATION_STATUS.SENT,
+      sentAt: new Date(),
+    }));
+
+    if (userIds.length > 0 && !userIds.includes(SYSTEM_BROADCAST_USER_ID)) {
+      records.push({
+        userId: SYSTEM_BROADCAST_USER_ID,
+        incidentId: null,
+        templateId: null,
+        channel: NOTIFICATION_CHANNEL.IN_APP,
+        title: safeTitle,
+        content: dto.content,
+        severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
+        status: NOTIFICATION_STATUS.SENT,
+        sentAt: new Date(),
+      });
+    }
+
+    await this.repository.createManyNotifications(records);
+
+    // Phát real-time SSE cho các client đang kết nối
     this.sse.broadcast({
       type: "notification:broadcast",
       data: {
@@ -472,7 +507,8 @@ export class NotificationService {
         createdAt: new Date().toISOString(),
       },
     });
-    return { totalRecipients: 1 };
+
+    return { totalRecipients: recipientUserIds.length };
   }
 
   // ─────────────────────────────────────────────

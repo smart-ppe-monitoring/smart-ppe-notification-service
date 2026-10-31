@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import dns from "node:dns";
 import nodemailer, { Transporter } from "nodemailer";
 import { envConfig } from "../../config/env.config";
@@ -112,16 +113,35 @@ export class MailService {
   }
 
   private async sendViaWebhook(options: SendMailOptions): Promise<void> {
+    const payload = JSON.stringify({
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+    });
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    const webhookSecret =
+      mailConfig.webhookSecret ||
+      envConfig.gateway.internalSecret ||
+      envConfig.encryption.key;
+
+    if (webhookSecret) {
+      const signature = crypto
+        .createHmac("sha256", webhookSecret)
+        .update(payload)
+        .digest("hex");
+      headers["X-Webhook-Signature"] = signature;
+      headers["X-Webhook-Timestamp"] = Date.now().toString();
+      headers["Authorization"] = `Bearer ${webhookSecret}`;
+    }
+
     const response = await fetch(mailConfig.mailWebhookUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        to: options.to,
-        subject: options.subject,
-        html: options.html,
-      }),
+      headers,
+      body: payload,
     });
 
     if (!response.ok) {

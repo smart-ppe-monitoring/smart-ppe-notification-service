@@ -11,6 +11,7 @@ import {
   NOTIFICATION_TEMPLATE_STATUS,
   EMAIL_STATUS,
   EMAIL_MAX_ATTEMPTS,
+  SYSTEM_BROADCAST_USER_ID,
 } from "../../common/constants/notification.constant";
 import {
   calculatePaginationSkip,
@@ -53,7 +54,10 @@ export class NotificationRepository {
     const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
 
     const where: NotificationPrisma.NotificationWhereInput = {
-      userId,
+      OR: [
+        { userId },
+        { userId: SYSTEM_BROADCAST_USER_ID },
+      ],
     };
 
     if (isRead !== undefined) {
@@ -250,6 +254,36 @@ export class NotificationRepository {
     return this.db.notification.createMany({
       data: validData,
     });
+  }
+
+  /**
+   * Truy vấn danh sách các User ID duy nhất đã từng có tương tác trong hệ thống
+   * phục vụ lưu trữ thông báo phát thanh (Broadcast Persistence - SEC-15).
+   */
+  async findDistinctUserIds(): Promise<string[]> {
+    const [prefs, notifs] = await Promise.all([
+      this.db.notificationPreference.findMany({
+        select: { userId: true },
+        distinct: ["userId"],
+      }),
+      this.db.notification.findMany({
+        select: { userId: true },
+        distinct: ["userId"],
+        take: 1000,
+      }),
+    ]);
+    const userSet = new Set<string>();
+    prefs.forEach((p) => {
+      if (p.userId && isUuid(p.userId) && p.userId !== SYSTEM_BROADCAST_USER_ID) {
+        userSet.add(p.userId);
+      }
+    });
+    notifs.forEach((n) => {
+      if (n.userId && isUuid(n.userId) && n.userId !== SYSTEM_BROADCAST_USER_ID) {
+        userSet.add(n.userId);
+      }
+    });
+    return Array.from(userSet);
   }
 
   // ─────────────────────────────────────────────

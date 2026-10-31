@@ -159,6 +159,8 @@ const envSchema = z
     RESEND_API_KEY: z.string().default(""),
     /** URL HTTP Webhook relay email (Tầng 2 - Port 443 e.g. Google Apps Script) */
     MAIL_WEBHOOK_URL: z.string().default(""),
+    /** Secret key dùng để ký HMAC SHA-256 bảo vệ toàn vẹn email webhook payload (SEC-13) */
+    MAIL_WEBHOOK_SECRET: z.string().default(""),
     MAIL_HOST: z.string().default("smtp.gmail.com"),
     MAIL_PORT: z.coerce.number().int().positive().default(587),
     MAIL_SECURE: z.string().default("false"),
@@ -493,6 +495,7 @@ export const envConfig = {
     from: _env.MAIL_FROM,
     resendApiKey: _env.RESEND_API_KEY,
     webhookUrl: _env.MAIL_WEBHOOK_URL,
+    webhookSecret: _env.MAIL_WEBHOOK_SECRET,
   },
   turnstile: {
     enabled: _env.TURNSTILE_ENABLED === "true",

@@ -14,7 +14,7 @@ describe("Security Audit Patches - Batch 1 (SEC-01, SEC-02, SEC-03, SEC-04)", ()
     it("should allow Admin without API Key to pass any permission check", () => {
       const middleware = requirePermission(PERMISSIONS.NOTIFICATION_CREATE);
       const req: any = {
-        user: { id: "admin-1", role: ROLES.ADMIN, permissions: [] },
+        user: { id: "admin-1", role: ROLES.ADMIN },
       };
       let nextCalled = false;
       let errorThrown: any = null;
@@ -31,7 +31,7 @@ describe("Security Audit Patches - Batch 1 (SEC-01, SEC-02, SEC-03, SEC-04)", ()
     it("should BLOCK Admin with scoped API Key lacking the required permission (SEC-01 fix)", () => {
       const middleware = requirePermission(PERMISSIONS.NOTIFICATION_CREATE);
       const req: any = {
-        user: { id: "admin-1", role: ROLES.ADMIN, permissions: [] },
+        user: { id: "admin-1", role: ROLES.ADMIN },
         apiKey: { id: "key-1", permissions: [PERMISSIONS.NOTIFICATION_READ] }, // Scoped read-only!
       };
       let nextCalled = false;
@@ -50,7 +50,7 @@ describe("Security Audit Patches - Batch 1 (SEC-01, SEC-02, SEC-03, SEC-04)", ()
     it("should allow Admin with scoped API Key that HAS the required permission", () => {
       const middleware = requirePermission(PERMISSIONS.NOTIFICATION_CREATE);
       const req: any = {
-        user: { id: "admin-1", role: ROLES.ADMIN, permissions: [] },
+        user: { id: "admin-1", role: ROLES.ADMIN },
         apiKey: { id: "key-1", permissions: [PERMISSIONS.NOTIFICATION_CREATE] },
       };
       let nextCalled = false;
@@ -68,7 +68,7 @@ describe("Security Audit Patches - Batch 1 (SEC-01, SEC-02, SEC-03, SEC-04)", ()
     it("should BLOCK Admin with scoped API Key lacking any permissions in requireAnyPermission", () => {
       const middleware = requireAnyPermission(PERMISSIONS.NOTIFICATION_CREATE, PERMISSIONS.NOTIFICATION_DELETE);
       const req: any = {
-        user: { id: "admin-1", role: ROLES.ADMIN, permissions: [] },
+        user: { id: "admin-1", role: ROLES.ADMIN },
         apiKey: { id: "key-1", permissions: [PERMISSIONS.NOTIFICATION_READ] },
       };
       let nextCalled = false;

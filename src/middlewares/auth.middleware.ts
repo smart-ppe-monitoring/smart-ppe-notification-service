@@ -165,7 +165,9 @@ export async function authMiddleware(
       email: payload.email,
       role: payload.role,
       roleId: payload.roleId,
-      permissions: Array.isArray(payload.permissions) ? payload.permissions : [],
+      permissions: Array.isArray(payload.permissions)
+        ? payload.permissions
+        : undefined,
     };
 
     next();

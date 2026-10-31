@@ -77,9 +77,10 @@ export class EmailTemplateService {
   }
 
   baseLayout(title: string, bodyHtml: string): string {
+    const safeTitle = escapeHtml(title || "");
     return `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; background-color: #ffffff;">
-        <h2 style="color: #4CAF50; text-align: center; margin-bottom: 24px;">${title}</h2>
+        <h2 style="color: #4CAF50; text-align: center; margin-bottom: 24px;">${safeTitle}</h2>
         ${bodyHtml}
         <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 24px 0;" />
         <p style="color: #999; font-size: 12px; text-align: center;">
