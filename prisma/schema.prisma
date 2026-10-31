@@ -93,3 +93,20 @@ model EmailNotification {
   @@map("email_notifications")
 }
 
+model OutboxEvent {
+  id          String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  eventType   String    @map("event_type")
+  payload     Json
+  aggregateId String?   @map("aggregate_id")
+  status      String    @default("PENDING")
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error")
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([eventType])
+  @@map("outbox_events")
+}
+

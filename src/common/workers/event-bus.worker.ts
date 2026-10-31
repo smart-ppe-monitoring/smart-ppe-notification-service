@@ -38,8 +38,7 @@ export class EventBusWorker {
         maxRetriesPerRequest: null,
         enableReadyCheck: false,
         retryStrategy: (times) => {
-          if (times > 3) return null;
-          return Math.min(times * 200, 1000);
+          return Math.min(times * 200, 3000);
         },
       });
 

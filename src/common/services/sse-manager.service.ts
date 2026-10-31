@@ -46,11 +46,7 @@ export class SseManagerService {
         enableReadyCheck: false,
         lazyConnect: true,
         retryStrategy: (times: number) => {
-          if (times > 2) {
-            this.isRedisAvailable = false;
-            return null;
-          }
-          return Math.min(times * 200, 500);
+          return Math.min(times * 200, 3000);
         },
       };
 

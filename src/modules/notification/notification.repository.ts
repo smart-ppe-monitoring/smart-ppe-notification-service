@@ -546,15 +546,19 @@ export class NotificationRepository {
     };
   }
 
-  async resetEmailForRetry(id: string) {
-    return (notificationPrisma as any).emailNotification.update({
-      where: { id },
+  async resetEmailForRetry(id: string): Promise<boolean> {
+    const result = await (notificationPrisma as any).emailNotification.updateMany({
+      where: {
+        id,
+        status: EMAIL_STATUS.FAILED,
+      },
       data: {
         status: EMAIL_STATUS.PENDING,
         attempts: 0,
         lastError: null,
       },
     });
+    return result.count > 0;
   }
 
   async createAuditLog(params: {

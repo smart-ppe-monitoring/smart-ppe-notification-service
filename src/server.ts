@@ -11,6 +11,7 @@ try {
 import notificationApp from "./notification.app";
 import { envConfig } from "./config/env.config";
 import { emailWorker } from "./common/workers/email-worker";
+import { outboxWorker } from "./common/workers/outbox.worker";
 import { EventBusWorker } from "./common/workers/event-bus.worker";
 import { EVENT_BUS_CONSTANTS } from "./common/constants/event.constant";
 import { notificationSubscriber } from "./common/subscribers/notification.subscriber";
@@ -41,12 +42,13 @@ export const server = notificationApp.listen(PORT, async () => {
   // 1. Đăng ký subscriber lắng nghe events từ Auth & Core services
   notificationSubscriber.register();
 
-  // 2. Khởi chạy EventBus worker (chuyên biệt cho notification queue) và Email worker
+  // 2. Khởi chạy EventBus worker (chuyên biệt cho notification queue), Outbox worker và Email worker
   notificationEventBusWorker.start();
+  outboxWorker.start();
   emailWorker.start();
 
   console.log(
-    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker and EmailWorker are active.",
+    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker, OutboxWorker and EmailWorker are active.",
   );
 });
 
@@ -95,9 +97,10 @@ export async function handleNotificationShutdown(
     await Promise.allSettled([
       emailWorker.stop(),
       notificationEventBusWorker.stop(),
+      outboxWorker.stop(),
     ]);
     console.log(
-      "[Notification Service] EmailWorker & NotificationEventBusWorker stopped.",
+      "[Notification Service] EmailWorker, NotificationEventBusWorker & OutboxWorker stopped.",
     );
 
     // 4. Close SSE connections & EventBus

@@ -706,15 +706,22 @@ export class NotificationService {
       throw new AppError("Không tìm thấy bản ghi email", 404, ERROR_CODE.NOT_FOUND);
     }
 
-    if (email.status === EMAIL_STATUS.SENT) {
+    if (email.status !== EMAIL_STATUS.FAILED) {
       throw new AppError(
-        "Email này đã được gửi thành công, không thể thử lại",
+        "Chỉ có thể thử lại các email ở trạng thái FAILED (thất bại)",
         400,
-        ERROR_CODE.VALIDATION_ERROR,
+        ERROR_CODE.INVALID_STATUS_TRANSITION,
       );
     }
 
-    await this.repository.resetEmailForRetry(emailId);
+    const resetSuccess = await this.repository.resetEmailForRetry(emailId);
+    if (!resetSuccess) {
+      throw new AppError(
+        "Không thể thử lại email do trạng thái bản ghi đã thay đổi hoặc không phải FAILED",
+        400,
+        ERROR_CODE.INVALID_STATUS_TRANSITION,
+      );
+    }
   }
 }
 
