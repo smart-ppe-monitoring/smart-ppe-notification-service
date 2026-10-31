@@ -145,6 +145,21 @@ export async function authMiddleware(
       return;
     }
 
+    // SEC-08: Chặn token có cờ mustChangePassword truy cập satellite services
+    if (
+      payload.mustChangePassword === true ||
+      payload.mustChangePassword === "true"
+    ) {
+      next(
+        new AppError(
+          "Bạn bắt buộc phải đổi mật khẩu trước khi thực hiện các thao tác khác trên hệ thống",
+          403,
+          ERROR_CODE.FORBIDDEN,
+        ),
+      );
+      return;
+    }
+
     req.user = {
       id: payload.id || payload.sub,
       email: payload.email,

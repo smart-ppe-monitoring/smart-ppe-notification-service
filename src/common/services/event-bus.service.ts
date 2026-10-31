@@ -446,37 +446,42 @@ export class EventBusService {
   }
 
   /**
-   * Mã hóa các trường dữ liệu nhạy cảm (verifyToken, resetToken) trong payload
-   * trước khi lưu vào bảng outbox_events nhằm chống rò rỉ token plain-text.
+   * Danh sách tên các trường dữ liệu nhạy cảm cần được mã hóa trước khi ghi vào Outbox CSDL
+   */
+  private static readonly SENSITIVE_FIELD_NAMES = new Set([
+    "verifytoken",
+    "resettoken",
+    "deactivationtoken",
+    "otp",
+    "code",
+    "temppassword",
+    "password",
+    "token",
+    "secret",
+    "refreshtoken",
+    "twofactorcode",
+    "verificationcode",
+  ]);
+
+  /**
+   * Mã hóa các trường dữ liệu nhạy cảm (tokens, OTP, password, secrets) trong payload
+   * trước khi lưu vào bảng outbox_events nhằm chống rò rỉ plain-text trong CSDL và Redis queue (SEC-09).
    */
   public encryptSensitivePayloadFields<T>(payload: T): T {
     if (!payload || typeof payload !== "object") return payload;
     const clone = { ...(payload as any) };
 
-    if ("verifyToken" in clone && typeof clone.verifyToken === "string") {
-      try {
-        clone.verifyToken = `enc:${encryptSecret(clone.verifyToken)}`;
-      } catch {
-        // Giữ nguyên nếu chưa có master key trong môi trường test
-      }
-    }
-
-    if ("resetToken" in clone && typeof clone.resetToken === "string") {
-      try {
-        clone.resetToken = `enc:${encryptSecret(clone.resetToken)}`;
-      } catch {
-        // Giữ nguyên nếu chưa có master key trong môi trường test
-      }
-    }
-
-    if (
-      "deactivationToken" in clone &&
-      typeof clone.deactivationToken === "string"
-    ) {
-      try {
-        clone.deactivationToken = `enc:${encryptSecret(clone.deactivationToken)}`;
-      } catch {
-        // Giữ nguyên nếu chưa có master key trong môi trường test
+    for (const key of Object.keys(clone)) {
+      if (
+        EventBusService.SENSITIVE_FIELD_NAMES.has(key.toLowerCase()) &&
+        typeof clone[key] === "string" &&
+        !clone[key].startsWith("enc:")
+      ) {
+        try {
+          clone[key] = `enc:${encryptSecret(clone[key])}`;
+        } catch {
+          // Giữ nguyên nếu chưa có master key trong môi trường test
+        }
       }
     }
 
@@ -490,41 +495,17 @@ export class EventBusService {
     if (!payload || typeof payload !== "object") return payload;
     const clone = { ...(payload as any) };
 
-    if (
-      "verifyToken" in clone &&
-      typeof clone.verifyToken === "string" &&
-      clone.verifyToken.startsWith("enc:")
-    ) {
-      try {
-        clone.verifyToken = decryptSecret(clone.verifyToken.slice(4));
-      } catch {
-        // Giữ nguyên nếu giải mã thất bại
-      }
-    }
-
-    if (
-      "resetToken" in clone &&
-      typeof clone.resetToken === "string" &&
-      clone.resetToken.startsWith("enc:")
-    ) {
-      try {
-        clone.resetToken = decryptSecret(clone.resetToken.slice(4));
-      } catch {
-        // Giữ nguyên nếu giải mã thất bại
-      }
-    }
-
-    if (
-      "deactivationToken" in clone &&
-      typeof clone.deactivationToken === "string" &&
-      clone.deactivationToken.startsWith("enc:")
-    ) {
-      try {
-        clone.deactivationToken = decryptSecret(
-          clone.deactivationToken.slice(4),
-        );
-      } catch {
-        // Giữ nguyên nếu giải mã thất bại
+    for (const key of Object.keys(clone)) {
+      if (
+        EventBusService.SENSITIVE_FIELD_NAMES.has(key.toLowerCase()) &&
+        typeof clone[key] === "string" &&
+        clone[key].startsWith("enc:")
+      ) {
+        try {
+          clone[key] = decryptSecret(clone[key].slice(4));
+        } catch {
+          // Giữ nguyên nếu giải mã thất bại
+        }
       }
     }
 
