@@ -103,7 +103,7 @@ export class EmailTemplateService {
         <p>Chào ${safeName},</p>
         <p>Cảm ơn bạn đã đăng ký tài khoản. Vui lòng click vào nút bên dưới để xác thực email:</p>
         <div style="text-align: center; margin: 32px 0;">
-          <a href="${verificationUrl}"
+          <a href="${escapeHtml(verificationUrl)}"
              style="background-color: #4CAF50; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold;">
             Xác thực tài khoản
           </a>
@@ -129,7 +129,7 @@ export class EmailTemplateService {
         <p>Chào ${safeName},</p>
         <p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn.</p>
         <div style="text-align: center; margin: 32px 0;">
-          <a href="${resetUrl}"
+          <a href="${escapeHtml(resetUrl)}"
              style="background-color: #FF5722; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold;">
             Đặt lại mật khẩu
           </a>
@@ -226,3 +226,5 @@ export class EmailTemplateService {
     return { subject, html };
   }
 }
+
+export const emailTemplateService = new EmailTemplateService();

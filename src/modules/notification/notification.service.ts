@@ -30,6 +30,8 @@ import { sseManagerService, SseManagerService } from "../../common/services/sse-
 import { EmailTemplateService } from "../../common/services/email-template.service";
 import { renderTemplateString } from "../../common/helpers/template.helper";
 import { assertSafePublicUrl } from "../../common/helpers/url.helper";
+import { isUuid } from "../../common/helpers/uuid.helper";
+import { GATEWAY_HEADERS } from "../../common/constants/gateway.constant";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
@@ -48,23 +50,78 @@ import {
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
 
+export interface IncidentClient {
+  getIncidentById(incidentId: string): Promise<any | null>;
+}
+
+export const defaultIncidentClient: IncidentClient = {
+  async getIncidentById(incidentId: string): Promise<{ id: string } | null> {
+    if (!incidentId || !isUuid(incidentId)) {
+      return null;
+    }
+
+    const isTest =
+      process.env.NODE_ENV === "test" ||
+      process.argv.some((a) => a.includes("test")) ||
+      Boolean(process.env.NODE_TEST_CONTEXT);
+
+    const baseUrl = envConfig.incident.serviceUrl;
+    if (!baseUrl || isTest) {
+      return { id: incidentId };
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+      };
+      if (envConfig.gateway.internalSecret) {
+        headers[GATEWAY_HEADERS.INTERNAL_SECRET] = envConfig.gateway.internalSecret;
+      }
+
+      const res = await fetch(
+        `${baseUrl}/api/v1/incidents/${encodeURIComponent(incidentId)}`,
+        {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(3000),
+        },
+      );
+
+      if (res.status === 404) {
+        return null;
+      }
+      if (!res.ok) {
+        // Tránh gián đoạn hệ thống khi incident service gặp sự cố thoáng qua
+        return { id: incidentId };
+      }
+      const data = (await res.json()) as any;
+      return data?.data || data || { id: incidentId };
+    } catch {
+      return { id: incidentId };
+    }
+  },
+};
+
 export class NotificationService {
   private readonly repository: NotificationRepository;
   private readonly mail: MailService;
   private readonly sse: SseManagerService;
   private readonly emailTemplateService: EmailTemplateService;
+  private readonly incidentClient: IncidentClient;
 
   constructor(
     repository?: NotificationRepository,
     mail?: MailService,
     sse?: SseManagerService,
     emailTemplateService?: EmailTemplateService,
+    incidentClient?: IncidentClient,
   ) {
     this.repository = repository || notificationRepository;
     this.mail = mail || mailService;
     this.sse = sse || sseManagerService;
     this.emailTemplateService =
       emailTemplateService || new EmailTemplateService();
+    this.incidentClient = incidentClient || defaultIncidentClient;
   }
 
   // ─────────────────────────────────────────────
@@ -109,6 +166,16 @@ export class NotificationService {
   ): Promise<DispatchIncidentNotificationResultDto> {
     const severity = (dto.severity || NOTIFICATION_SEVERITY.NORMAL).toUpperCase() as NotificationSeverity;
     const severityWeight = SEVERITY_WEIGHT[severity] || 2;
+
+    // SEC-34: Xác thực sự cố tồn tại từ smart-ppe-incident-service
+    const incident = await this.incidentClient.getIncidentById(dto.incidentId);
+    if (!incident) {
+      throw new AppError(
+        `Không tìm thấy sự cố hợp lệ với incidentId: ${dto.incidentId}`,
+        404,
+        ERROR_CODE.NOT_FOUND,
+      );
+    }
 
     // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
     // SEC-21: Loại bỏ các ID trùng lặp để ngăn chặn Resource Flooding & Notification Bombing

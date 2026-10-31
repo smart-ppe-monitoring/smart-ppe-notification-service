@@ -32,7 +32,7 @@ export function getSharedRateLimitRedisClient(): IORedis | null {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
-      retryStrategy: () => null, // Không thử lại vô hạn để tránh treo event loop
+      retryStrategy: (times) => Math.min(times * 100, 2000), // SEC-37: Tự động kết nối lại có backoff để chống mất rate limiter vĩnh viễn khi boot
     });
 
     sharedRedisClient.on("connect", () => {

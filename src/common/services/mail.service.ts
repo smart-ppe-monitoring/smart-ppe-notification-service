@@ -214,6 +214,7 @@ export class MailService {
 
   async sendVerificationEmail(email: string, token: string, fullName?: string) {
     const verificationUrl = `${mailConfig.verificationUrl}?token=${token}`;
+    const safeVerificationUrl = escapeHtml(verificationUrl);
     const safeFullName = escapeHtml(fullName) || "bạn";
     const mailOptions: SendMailOptions = {
       from: mailConfig.from,
@@ -226,10 +227,10 @@ export class MailService {
           <p>Cảm ơn bạn đã đăng ký tài khoản.</p>
           <p>Vui lòng xác nhận địa chỉ email của bạn để kích hoạt tài khoản bằng cách click vào nút bên dưới:</p>
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${verificationUrl}" style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Kích hoạt tài khoản</a>
+            <a href="${safeVerificationUrl}" style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Kích hoạt tài khoản</a>
           </div>
           <p>Hoặc bạn có thể sao chép liên kết dưới đây và dán vào trình duyệt của bạn:</p>
-          <p style="word-break: break-all; color: #888888;">${verificationUrl}</p>
+          <p style="word-break: break-all; color: #888888;">${safeVerificationUrl}</p>
           <p>Liên kết này sẽ có hiệu lực trong vòng 24 giờ.</p>
           <hr style="border: 0; border-top: 1px solid #e0e0e0; margin: 20px 0;" />
           <p style="font-size: 12px; color: #888888; text-align: center;">Nếu bạn không thực hiện yêu cầu này, vui lòng bỏ qua email này.</p>
@@ -272,6 +273,7 @@ export class MailService {
     fullName?: string,
   ) {
     const resetUrl = `${mailConfig.resetPasswordUrl}?token=${token}`;
+    const safeResetUrl = escapeHtml(resetUrl);
     const safeFullName = escapeHtml(fullName) || "bạn";
     const mailOptions: SendMailOptions = {
       from: mailConfig.from,
@@ -284,10 +286,10 @@ export class MailService {
           <p>Chúng tôi nhận được yêu cầu khôi phục mật khẩu cho tài khoản liên kết với địa chỉ email này.</p>
           <p>Vui lòng click vào nút bên dưới để tiến hành đặt lại mật khẩu mới:</p>
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${resetUrl}" style="background-color: #f44336; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Đặt lại mật khẩu</a>
+            <a href="${safeResetUrl}" style="background-color: #f44336; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Đặt lại mật khẩu</a>
           </div>
           <p>Hoặc bạn có thể sao chép liên kết dưới đây và dán vào trình duyệt của bạn:</p>
-          <p style="word-break: break-all; color: #888888;">${resetUrl}</p>
+          <p style="word-break: break-all; color: #888888;">${safeResetUrl}</p>
           <p>Liên kết này sẽ có hiệu lực trong vòng 1 giờ.</p>
           <hr style="border: 0; border-top: 1px solid #e0e0e0; margin: 20px 0;" />
           <p style="font-size: 12px; color: #888888; text-align: center;">Nếu bạn không thực hiện yêu cầu này, vui lòng bỏ qua email này. Mật khẩu của bạn sẽ không thay đổi.</p>
@@ -400,6 +402,8 @@ export class MailService {
     fullName?: string,
   ) {
     const deactivationUrl = `${mailConfig.deactivationUrl}?token=${token}`;
+    const safeDeactivationUrl = escapeHtml(deactivationUrl);
+    const safeToken = escapeHtml(token);
     const safeFullName = escapeHtml(fullName) || "bạn";
     const mailOptions: SendMailOptions = {
       from: mailConfig.from,
@@ -420,12 +424,12 @@ export class MailService {
 
           <p>Nếu bạn thực sự muốn tiếp tục, vui lòng click vào nút xác nhận bên dưới:</p>
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${deactivationUrl}" style="background-color: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Xác nhận vô hiệu hóa tài khoản</a>
+            <a href="${safeDeactivationUrl}" style="background-color: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Xác nhận vô hiệu hóa tài khoản</a>
           </div>
 
           <p>Hoặc sử dụng mã xác nhận (Token) trực tiếp qua ứng dụng:</p>
           <div style="background-color: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 14px; word-break: break-all; text-align: center;">
-            ${token}
+            ${safeToken}
           </div>
 
           <p style="color: #666; font-size: 13px; margin-top: 15px;">Yêu cầu này sẽ tự động hết hạn sau <strong>15 phút</strong>.</p>
