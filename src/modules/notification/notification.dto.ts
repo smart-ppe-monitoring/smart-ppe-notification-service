@@ -69,6 +69,8 @@ export interface DispatchIncidentNotificationDto {
   detectedAt?: Date | string;
   recipientUserIds?: string[];
   channels?: NotificationChannel[];
+  recipientEmails?: Record<string, string> | string[];
+  recipientUsers?: Array<{ id: string; email?: string }>;
 }
 
 export interface DispatchIncidentNotificationResultDto {

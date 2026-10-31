@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { jwtConfig } from "../../config/jwt.config";
+import { envConfig } from "../../config/env.config";
 import { JWT_PURPOSE } from "../../common/constants/jwt.constant";
 import { AppError } from "../../common/errors/app-error";
 import { ERROR_CODE } from "../../common/errors/error-code";
@@ -119,17 +120,45 @@ export class NotificationService {
       };
     }
 
-    // 2. Tra cứu thông tin người dùng nhận tin để lấy email
-    const users: Array<{ id: string; email?: string }> = recipientIds.map((id) => ({
-      id,
-      email: `${id}@smart-ppe.local`,
-    }));
+    // 2. SEC-06: Tra cứu thông tin người dùng nhận tin để lấy email thực nếu được cung cấp
+    const emailMap = new Map<string, string>();
+    if (dto.recipientEmails && typeof dto.recipientEmails === "object") {
+      if (Array.isArray(dto.recipientEmails)) {
+        dto.recipientEmails.forEach((email, idx) => {
+          if (recipientIds[idx]) emailMap.set(recipientIds[idx], email);
+        });
+      } else {
+        Object.entries(dto.recipientEmails).forEach(([uid, email]) => {
+          if (typeof email === "string") emailMap.set(uid, email);
+        });
+      }
+    }
+    if (Array.isArray(dto.recipientUsers)) {
+      dto.recipientUsers.forEach((u) => {
+        if (u.id && u.email) emailMap.set(u.id, u.email);
+      });
+    }
+
+    const users: Array<{ id: string; email?: string }> = recipientIds.map((id) => {
+      const explicitEmail = emailMap.get(id);
+      if (explicitEmail) {
+        return { id, email: explicitEmail };
+      }
+      // SEC-06: Trong môi trường production, tuyệt đối không bịa email giả với domain .local
+      // để tránh 100% hard bounce làm nhà cung cấp email (Resend/SES) khóa tài khoản.
+      if (envConfig.nodeEnv === "production") {
+        return { id, email: undefined };
+      }
+      // Trong dev / test, cho phép fallback để mock unit test hoạt động
+      return { id, email: `${id}@smart-ppe.local` };
+    });
     const userMap = new Map<string, { id: string; email?: string }>(
       users.map((u: { id: string; email?: string }) => [u.id, u]),
     );
 
-    // 3. Render nội dung cảnh báo vi phạm PPE
-    const title = `🚨 Cảnh báo vi phạm PPE [${severity}]: ${dto.violationType} tại ${dto.siteName || "Công trường"}`;
+    // 3. SEC-05: Render nội dung cảnh báo vi phạm PPE với giới hạn VarChar(255) cho title
+    const rawTitle = `🚨 Cảnh báo vi phạm PPE [${severity}]: ${dto.violationType} tại ${dto.siteName || "Công trường"}`;
+    const title = rawTitle.length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
     const content =
       dto.description ||
       `Phát hiện vi phạm ${dto.violationType} tại vị trí camera ${dto.cameraCode || dto.cameraId || "Chưa xác định"}. Mức độ: ${severity}. Vui lòng kiểm tra và xử lý ngay.`;
@@ -384,11 +413,13 @@ export class NotificationService {
     const {
       userIds,
       channels,
-      title,
+      title: rawTitle,
       content,
       severity = NOTIFICATION_SEVERITY.NORMAL,
       incidentId,
     } = dto;
+
+    const title = (rawTitle || "").length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
 
     const records = [];
     for (const userId of userIds) {
@@ -431,10 +462,11 @@ export class NotificationService {
   async broadcast(
     dto: BroadcastNotificationDto,
   ): Promise<{ totalRecipients: number }> {
+    const safeTitle = (dto.title || "").length > 255 ? dto.title.slice(0, 252) + "..." : dto.title;
     this.sse.broadcast({
       type: "notification:broadcast",
       data: {
-        title: dto.title,
+        title: safeTitle,
         content: dto.content,
         severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
         createdAt: new Date().toISOString(),

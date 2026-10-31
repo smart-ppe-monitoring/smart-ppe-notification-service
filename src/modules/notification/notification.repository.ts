@@ -425,7 +425,19 @@ export class NotificationRepository {
       WHERE id IN (
         SELECT id FROM email_notifications
         WHERE (
-          status = ${EMAIL_STATUS.PENDING}
+          (
+            status = ${EMAIL_STATUS.PENDING}
+            AND (
+              attempts = 0
+              OR updated_at <= NOW() - (
+                CASE
+                  WHEN attempts = 1 THEN INTERVAL '30 seconds'
+                  WHEN attempts = 2 THEN INTERVAL '120 seconds'
+                  ELSE INTERVAL '300 seconds'
+                END
+              )
+            )
+          )
           OR (status = ${EMAIL_STATUS.PROCESSING} AND updated_at < NOW() - INTERVAL '15 minutes')
         )
         AND attempts < ${EMAIL_MAX_ATTEMPTS}

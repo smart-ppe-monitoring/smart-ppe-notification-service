@@ -72,6 +72,8 @@ export const dispatchIncidentNotificationSchema = z.object({
   channels: z
     .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
     .optional(),
+  recipientEmails: z.union([z.record(z.string().email()), z.array(z.string().email())]).optional(),
+  recipientUsers: z.array(z.object({ id: z.string().uuid(), email: z.string().email().optional() })).optional(),
 });
 
 // ─────────────────────────────────────────────
@@ -100,7 +102,7 @@ export const sendNotificationSchema = z.object({
   channels: z
     .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
     .min(1, "At least one channel is required"),
-  title: z.string().min(1, "Title is required"),
+  title: z.string().min(1, "Title is required").max(255, "Title must not exceed 255 characters"),
   content: z.string().min(1, "Content is required"),
   severity: z
     .enum(["LOW", "NORMAL", "MEDIUM", "HIGH", "CRITICAL"])
@@ -124,7 +126,7 @@ export const sendNotificationSchema = z.object({
 });
 
 export const broadcastNotificationSchema = z.object({
-  title: z.string().min(1, "Title is required"),
+  title: z.string().min(1, "Title is required").max(255, "Title must not exceed 255 characters"),
   content: z.string().min(1, "Content is required"),
   severity: z
     .enum(["LOW", "NORMAL", "MEDIUM", "HIGH", "CRITICAL"])
@@ -160,12 +162,12 @@ export const createNotificationTemplateSchema = z.object({
   code: z
     .string()
     .min(2, "Code must be at least 2 characters")
-    .max(100)
+    .max(50, "Code must not exceed 50 characters")
     .regex(
       /^[A-Z0-9_]+$/,
       "Code must contain only uppercase letters, numbers, and underscores",
     ),
-  name: z.string().min(1, "Name is required").max(255),
+  name: z.string().min(1, "Name is required").max(150, "Name must not exceed 150 characters"),
   channel: z
     .enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"])
     .default("IN_APP"),
@@ -178,7 +180,7 @@ export const createNotificationTemplateSchema = z.object({
     .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
     .optional(),
   subject: z.string().optional(),
-  title: z.string().optional(),
+  title: z.string().max(255).optional(),
   content: z.string().optional(),
   variables: z.array(z.string()).default([]),
   isActive: z.boolean().default(true),
@@ -191,7 +193,7 @@ export const createNotificationTemplateSchema = z.object({
 );
 
 export const updateNotificationTemplateSchema = z.object({
-  name: z.string().min(1, "Name is required").max(255).optional(),
+  name: z.string().min(1, "Name is required").max(150, "Name must not exceed 150 characters").optional(),
   channel: z
     .enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"])
     .optional(),

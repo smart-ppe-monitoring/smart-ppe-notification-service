@@ -132,7 +132,7 @@ export class EmailWorker {
         });
 
       console.error(
-        `[EmailWorker] ❌ Failed email ${record.id} (attempt ${newAttempts}/${EMAIL_MAX_ATTEMPTS}):`,
+        `[EmailWorker] ❌ Failed email ${record.id} (attempt ${newAttempts}/${EMAIL_MAX_ATTEMPTS}, scheduled with exponential backoff):`,
         error?.message,
       );
     }

@@ -517,6 +517,21 @@ export class MailService {
       return;
     }
 
+    // SEC-06: Chặn gửi email tới domain giả mạo/nội bộ trong production (.local, .internal, .test) để chống Hard Bounce làm khóa tài khoản email
+    if (
+      envConfig.nodeEnv === "production" &&
+      (to.endsWith(".local") ||
+        to.endsWith(".internal") ||
+        to.endsWith(".test") ||
+        !to.includes("@") ||
+        !to.split("@")[1]?.includes("."))
+    ) {
+      console.warn(
+        `[MailService] Bỏ qua gửi email tới domain không hợp lệ/nội bộ trong production: ${to}`,
+      );
+      return;
+    }
+
     try {
       await this.dispatchEmail(mailOptions);
     } catch (error) {
