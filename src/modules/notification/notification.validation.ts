@@ -149,6 +149,7 @@ export const listEmailsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   status: z.enum(["PENDING", "PROCESSING", "SENT", "FAILED"]).optional(),
   toEmail: z.string().optional(),
+  userId: z.string().uuid().optional(),
 });
 
 // ─────────────────────────────────────────────

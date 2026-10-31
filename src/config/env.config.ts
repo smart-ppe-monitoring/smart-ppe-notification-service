@@ -261,19 +261,23 @@ const envSchema = z
   )
   .refine(
     (env) => {
+      // SEC-04: Satellite services ONLY require public key or JWKS URL in production to verify RS256 tokens offline.
+      // Master JWT_PRIVATE_KEY must NEVER be distributed to satellite containers.
       if (env.NODE_ENV !== "production") return true;
       if (env.JWT_ALGORITHM === "RS256") {
         return (
-          typeof env.JWT_PRIVATE_KEY === "string" &&
-          env.JWT_PRIVATE_KEY.trim().length > 0
+          (typeof env.JWT_PUBLIC_KEY === "string" &&
+            env.JWT_PUBLIC_KEY.trim().length > 0) ||
+          (typeof env.AUTH_JWKS_URL === "string" &&
+            env.AUTH_JWKS_URL.trim().length > 0)
         );
       }
       return true;
     },
     {
       message:
-        "JWT_PRIVATE_KEY bắt buộc phải được cấu hình khi JWT_ALGORITHM=RS256 trong môi trường production (định dạng PEM, base64 hoặc đường dẫn file)",
-      path: ["JWT_PRIVATE_KEY"],
+        "JWT_PUBLIC_KEY hoặc AUTH_JWKS_URL bắt buộc phải được cấu hình khi JWT_ALGORITHM=RS256 trong môi trường production cho dịch vụ vệ tinh",
+      path: ["JWT_PUBLIC_KEY"],
     },
   )
   .refine(

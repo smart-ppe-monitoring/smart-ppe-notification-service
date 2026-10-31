@@ -229,6 +229,7 @@ export interface ListEmailsDto {
   limit?: number;
   status?: string;
   toEmail?: string;
+  userId?: string;
 }
 
 export interface EmailItemDto {

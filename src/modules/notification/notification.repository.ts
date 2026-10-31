@@ -480,6 +480,7 @@ export class NotificationRepository {
     const where: any = {};
     if (dto.status) where.status = dto.status;
     if (dto.toEmail) where.toEmail = { contains: dto.toEmail, mode: "insensitive" };
+    if (dto.userId) where.userId = dto.userId;
 
     const [items, total] = await Promise.all([
       (notificationPrisma as any).emailNotification.findMany({

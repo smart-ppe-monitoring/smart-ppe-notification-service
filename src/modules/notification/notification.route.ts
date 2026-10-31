@@ -91,11 +91,11 @@ router.post(
 );
 
 // ─────────────────────────────────────────────
-// Email Logs (Legacy / Operational Support)
+// Email Logs (Administrative Operational Support)
 // ─────────────────────────────────────────────
 router.get(
   "/emails",
-  requirePermission(PERMISSIONS.NOTIFICATION_READ),
+  requirePermission(PERMISSIONS.NOTIFICATION_TEMPLATE_MANAGE),
   validate(listEmailsSchema, "query"),
   controller.listEmails,
 );

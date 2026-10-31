@@ -127,6 +127,24 @@ export async function authMiddleware(
       return;
     }
 
+    // SEC-02: Chặn token tạm thời (2FA verification / temp token) hoặc token sai mục đích truy cập tài nguyên bảo vệ
+    if (
+      payload.purpose === JWT_PURPOSE.TWO_FACTOR ||
+      payload.type === "TEMP" ||
+      (payload.purpose &&
+        payload.purpose !== JWT_PURPOSE.ACCESS &&
+        !(isStreamPath && payload.purpose === JWT_PURPOSE.SSE_STREAM_TICKET))
+    ) {
+      next(
+        new AppError(
+          "Token không hợp lệ để truy cập tài nguyên được bảo vệ",
+          401,
+          ERROR_CODE.UNAUTHORIZED,
+        ),
+      );
+      return;
+    }
+
     req.user = {
       id: payload.id || payload.sub,
       email: payload.email,
