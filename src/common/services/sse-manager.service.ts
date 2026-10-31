@@ -284,11 +284,14 @@ export class SseManagerService {
 
   private sendRaw(res: Response, event: SseEvent): void {
     try {
+      // SEC-30: Lọc sạch ký tự CRLF (\r, \n) trong event.type và event.id để chống kỹ thuật SSE Stream Framing Injection
+      const sanitizedType = String(event.type || "message").replace(/[\r\n]/g, "");
       let payload = "";
       if (event.id) {
-        payload += `id: ${event.id}\n`;
+        const sanitizedId = String(event.id).replace(/[\r\n]/g, "");
+        payload += `id: ${sanitizedId}\n`;
       }
-      payload += `event: ${event.type}\n`;
+      payload += `event: ${sanitizedType}\n`;
       payload += `data: ${JSON.stringify(event.data)}\n\n`;
 
       res.write(payload);

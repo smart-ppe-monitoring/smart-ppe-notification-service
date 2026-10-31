@@ -34,6 +34,12 @@ export const notificationEventBusWorker = new EventBusWorker(
   EVENT_BUS_CONSTANTS.NOTIFICATION_QUEUE_NAME,
 );
 
+// SEC-32: Khởi chạy worker cho events-backbone-queue để tiêu thụ các sự kiện PPE domain và Core events
+export const backboneEventBusWorker = new EventBusWorker(
+  eventBus,
+  EVENT_BUS_CONSTANTS.DEFAULT_QUEUE_NAME,
+);
+
 export const server = notificationApp.listen(PORT, async () => {
   console.log(
     `[Notification Service] Running on http://localhost:${PORT} in ${envConfig.nodeEnv} mode`,
@@ -42,13 +48,14 @@ export const server = notificationApp.listen(PORT, async () => {
   // 1. Đăng ký subscriber lắng nghe events từ Auth & Core services
   notificationSubscriber.register();
 
-  // 2. Khởi chạy EventBus worker (chuyên biệt cho notification queue), Outbox worker và Email worker
+  // 2. Khởi chạy EventBus workers, Outbox worker và Email worker
   notificationEventBusWorker.start();
+  backboneEventBusWorker.start();
   outboxWorker.start();
   emailWorker.start();
 
   console.log(
-    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker, OutboxWorker and EmailWorker are active.",
+    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker, BackboneEventBusWorker, OutboxWorker and EmailWorker are active.",
   );
 });
 
@@ -97,10 +104,11 @@ export async function handleNotificationShutdown(
     await Promise.allSettled([
       emailWorker.stop(),
       notificationEventBusWorker.stop(),
+      backboneEventBusWorker.stop(),
       outboxWorker.stop(),
     ]);
     console.log(
-      "[Notification Service] EmailWorker, NotificationEventBusWorker & OutboxWorker stopped.",
+      "[Notification Service] EmailWorker, EventBusWorkers & OutboxWorker stopped.",
     );
 
     // 4. Close SSE connections & EventBus

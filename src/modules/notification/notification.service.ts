@@ -29,6 +29,7 @@ import { mailService, MailService } from "../../common/services/mail.service";
 import { sseManagerService, SseManagerService } from "../../common/services/sse-manager.service";
 import { EmailTemplateService } from "../../common/services/email-template.service";
 import { renderTemplateString } from "../../common/helpers/template.helper";
+import { assertSafePublicUrl } from "../../common/helpers/url.helper";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
@@ -112,6 +113,11 @@ export class NotificationService {
     // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
     // SEC-21: Loại bỏ các ID trùng lặp để ngăn chặn Resource Flooding & Notification Bombing
     const recipientIds = Array.from(new Set(dto.recipientUserIds || []));
+
+    // SEC-31: Xác thực evidenceUrl chống tấn công SSRF & DNS Rebinding
+    if (dto.evidenceUrl) {
+      await assertSafePublicUrl(dto.evidenceUrl);
+    }
 
     if (recipientIds.length === 0) {
       return {
@@ -423,6 +429,11 @@ export class NotificationService {
 
     const title = (rawTitle || "").length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
 
+    // SEC-31: Xác thực actionUrl chống tấn công SSRF & DNS Rebinding
+    if (dto.actionUrl) {
+      await assertSafePublicUrl(dto.actionUrl);
+    }
+
     // SEC-21: Deduplicate userIds & channels để chống Notification Bombing
     const uniqueUserIds = Array.from(new Set(userIds || []));
     const uniqueChannels = Array.from(new Set(channels || []));
@@ -522,6 +533,11 @@ export class NotificationService {
     dto: BroadcastNotificationDto,
   ): Promise<{ totalRecipients: number }> {
     const safeTitle = (dto.title || "").length > 255 ? dto.title.slice(0, 252) + "..." : dto.title;
+
+    // SEC-31: Xác thực actionUrl chống tấn công SSRF & DNS Rebinding
+    if (dto.actionUrl) {
+      await assertSafePublicUrl(dto.actionUrl);
+    }
 
     // SEC-15: Lưu trữ thông báo broadcast vào CSDL PostgreSQL để người dùng offline khi đăng nhập vẫn nhận được
     const userIds = await this.repository.findDistinctUserIds();
