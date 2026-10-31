@@ -77,9 +77,10 @@ export class EmailTemplateService {
   }
 
   baseLayout(title: string, bodyHtml: string): string {
+    const safeTitle = escapeHtml(title || "");
     return `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; background-color: #ffffff;">
-        <h2 style="color: #4CAF50; text-align: center; margin-bottom: 24px;">${title}</h2>
+        <h2 style="color: #4CAF50; text-align: center; margin-bottom: 24px;">${safeTitle}</h2>
         ${bodyHtml}
         <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 24px 0;" />
         <p style="color: #999; font-size: 12px; text-align: center;">
@@ -102,7 +103,7 @@ export class EmailTemplateService {
         <p>Chào ${safeName},</p>
         <p>Cảm ơn bạn đã đăng ký tài khoản. Vui lòng click vào nút bên dưới để xác thực email:</p>
         <div style="text-align: center; margin: 32px 0;">
-          <a href="${verificationUrl}"
+          <a href="${escapeHtml(verificationUrl)}"
              style="background-color: #4CAF50; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold;">
             Xác thực tài khoản
           </a>
@@ -128,7 +129,7 @@ export class EmailTemplateService {
         <p>Chào ${safeName},</p>
         <p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản của bạn.</p>
         <div style="text-align: center; margin: 32px 0;">
-          <a href="${resetUrl}"
+          <a href="${escapeHtml(resetUrl)}"
              style="background-color: #FF5722; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold;">
             Đặt lại mật khẩu
           </a>
@@ -225,3 +226,5 @@ export class EmailTemplateService {
     return { subject, html };
   }
 }
+
+export const emailTemplateService = new EmailTemplateService();

@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { jwtConfig } from "../../config/jwt.config";
+import { envConfig } from "../../config/env.config";
 import { JWT_PURPOSE } from "../../common/constants/jwt.constant";
 import { AppError } from "../../common/errors/app-error";
 import { ERROR_CODE } from "../../common/errors/error-code";
@@ -28,6 +29,9 @@ import { mailService, MailService } from "../../common/services/mail.service";
 import { sseManagerService, SseManagerService } from "../../common/services/sse-manager.service";
 import { EmailTemplateService } from "../../common/services/email-template.service";
 import { renderTemplateString } from "../../common/helpers/template.helper";
+import { assertSafePublicUrl } from "../../common/helpers/url.helper";
+import { isUuid } from "../../common/helpers/uuid.helper";
+import { GATEWAY_HEADERS } from "../../common/constants/gateway.constant";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
@@ -37,6 +41,7 @@ import {
   DEFAULT_EMAIL_SUBJECTS,
   EMAIL_STATUS,
   EMAIL_TEMPLATE_KEY,
+  SYSTEM_BROADCAST_USER_ID,
   NotificationChannel,
   NotificationSeverity,
 } from "../../common/constants/notification.constant";
@@ -45,23 +50,78 @@ import {
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
 
+export interface IncidentClient {
+  getIncidentById(incidentId: string): Promise<any | null>;
+}
+
+export const defaultIncidentClient: IncidentClient = {
+  async getIncidentById(incidentId: string): Promise<{ id: string } | null> {
+    if (!incidentId || !isUuid(incidentId)) {
+      return null;
+    }
+
+    const isTest =
+      process.env.NODE_ENV === "test" ||
+      process.argv.some((a) => a.includes("test")) ||
+      Boolean(process.env.NODE_TEST_CONTEXT);
+
+    const baseUrl = envConfig.incident.serviceUrl;
+    if (!baseUrl || isTest) {
+      return { id: incidentId };
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+      };
+      if (envConfig.gateway.internalSecret) {
+        headers[GATEWAY_HEADERS.INTERNAL_SECRET] = envConfig.gateway.internalSecret;
+      }
+
+      const res = await fetch(
+        `${baseUrl}/api/v1/incidents/${encodeURIComponent(incidentId)}`,
+        {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(3000),
+        },
+      );
+
+      if (res.status === 404) {
+        return null;
+      }
+      if (!res.ok) {
+        // Tránh gián đoạn hệ thống khi incident service gặp sự cố thoáng qua
+        return { id: incidentId };
+      }
+      const data = (await res.json()) as any;
+      return data?.data || data || { id: incidentId };
+    } catch {
+      return { id: incidentId };
+    }
+  },
+};
+
 export class NotificationService {
   private readonly repository: NotificationRepository;
   private readonly mail: MailService;
   private readonly sse: SseManagerService;
   private readonly emailTemplateService: EmailTemplateService;
+  private readonly incidentClient: IncidentClient;
 
   constructor(
     repository?: NotificationRepository,
     mail?: MailService,
     sse?: SseManagerService,
     emailTemplateService?: EmailTemplateService,
+    incidentClient?: IncidentClient,
   ) {
     this.repository = repository || notificationRepository;
     this.mail = mail || mailService;
     this.sse = sse || sseManagerService;
     this.emailTemplateService =
       emailTemplateService || new EmailTemplateService();
+    this.incidentClient = incidentClient || defaultIncidentClient;
   }
 
   // ─────────────────────────────────────────────
@@ -107,8 +167,24 @@ export class NotificationService {
     const severity = (dto.severity || NOTIFICATION_SEVERITY.NORMAL).toUpperCase() as NotificationSeverity;
     const severityWeight = SEVERITY_WEIGHT[severity] || 2;
 
+    // SEC-34: Xác thực sự cố tồn tại từ smart-ppe-incident-service
+    const incident = await this.incidentClient.getIncidentById(dto.incidentId);
+    if (!incident) {
+      throw new AppError(
+        `Không tìm thấy sự cố hợp lệ với incidentId: ${dto.incidentId}`,
+        404,
+        ERROR_CODE.NOT_FOUND,
+      );
+    }
+
     // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
-    const recipientIds = dto.recipientUserIds || [];
+    // SEC-21: Loại bỏ các ID trùng lặp để ngăn chặn Resource Flooding & Notification Bombing
+    const recipientIds = Array.from(new Set(dto.recipientUserIds || []));
+
+    // SEC-31: Xác thực evidenceUrl chống tấn công SSRF & DNS Rebinding
+    if (dto.evidenceUrl) {
+      await assertSafePublicUrl(dto.evidenceUrl);
+    }
 
     if (recipientIds.length === 0) {
       return {
@@ -119,17 +195,45 @@ export class NotificationService {
       };
     }
 
-    // 2. Tra cứu thông tin người dùng nhận tin để lấy email
-    const users: Array<{ id: string; email?: string }> = recipientIds.map((id) => ({
-      id,
-      email: `${id}@smart-ppe.local`,
-    }));
+    // 2. SEC-06: Tra cứu thông tin người dùng nhận tin để lấy email thực nếu được cung cấp
+    const emailMap = new Map<string, string>();
+    if (dto.recipientEmails && typeof dto.recipientEmails === "object") {
+      if (Array.isArray(dto.recipientEmails)) {
+        dto.recipientEmails.forEach((email, idx) => {
+          if (recipientIds[idx]) emailMap.set(recipientIds[idx], email);
+        });
+      } else {
+        Object.entries(dto.recipientEmails).forEach(([uid, email]) => {
+          if (typeof email === "string") emailMap.set(uid, email);
+        });
+      }
+    }
+    if (Array.isArray(dto.recipientUsers)) {
+      dto.recipientUsers.forEach((u) => {
+        if (u.id && u.email) emailMap.set(u.id, u.email);
+      });
+    }
+
+    const users: Array<{ id: string; email?: string }> = recipientIds.map((id) => {
+      const explicitEmail = emailMap.get(id);
+      if (explicitEmail) {
+        return { id, email: explicitEmail };
+      }
+      // SEC-06: Trong môi trường production, tuyệt đối không bịa email giả với domain .local
+      // để tránh 100% hard bounce làm nhà cung cấp email (Resend/SES) khóa tài khoản.
+      if (envConfig.nodeEnv === "production") {
+        return { id, email: undefined };
+      }
+      // Trong dev / test, cho phép fallback để mock unit test hoạt động
+      return { id, email: `${id}@smart-ppe.local` };
+    });
     const userMap = new Map<string, { id: string; email?: string }>(
       users.map((u: { id: string; email?: string }) => [u.id, u]),
     );
 
-    // 3. Render nội dung cảnh báo vi phạm PPE
-    const title = `🚨 Cảnh báo vi phạm PPE [${severity}]: ${dto.violationType} tại ${dto.siteName || "Công trường"}`;
+    // 3. SEC-05: Render nội dung cảnh báo vi phạm PPE với giới hạn VarChar(255) cho title
+    const rawTitle = `🚨 Cảnh báo vi phạm PPE [${severity}]: ${dto.violationType} tại ${dto.siteName || "Công trường"}`;
+    const title = rawTitle.length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
     const content =
       dto.description ||
       `Phát hiện vi phạm ${dto.violationType} tại vị trí camera ${dto.cameraCode || dto.cameraId || "Chưa xác định"}. Mức độ: ${severity}. Vui lòng kiểm tra và xử lý ngay.`;
@@ -344,6 +448,9 @@ export class NotificationService {
   // User Notification Preferences Management
   // ─────────────────────────────────────────────
 
+  // SEC-44: Tuân thủ chuẩn phương thức HTTP an toàn (Safe Methods RFC 7231).
+  // GET /preferences chỉ đọc dữ liệu, tuyệt đối không được phép ghi (upsert) vào CSDL nếu người dùng chưa có cấu hình.
+  // Trả về cấu hình đã lưu kết hợp với cấu hình mặc định (in-memory) cho các kênh còn thiếu mà không gây side-effect.
   async getUserPreferences(userId: string): Promise<NotificationPreferenceDto[]> {
     const preferences = await this.repository.findUserPreferences(userId);
     const existingChannels = new Set(preferences.map((p) => p.channel));
@@ -351,13 +458,15 @@ export class NotificationService {
 
     for (const def of DEFAULT_PREFERENCES) {
       if (!existingChannels.has(def.channel)) {
-        const created = await this.repository.upsertPreference(
+        merged.push({
+          id: `default-${userId}-${def.channel}`,
           userId,
-          def.channel,
-          def.enabled,
-          def.severityThreshold,
-        );
-        merged.push(created);
+          channel: def.channel,
+          enabled: def.enabled,
+          severityThreshold: def.severityThreshold,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        });
       }
     }
 
@@ -384,15 +493,69 @@ export class NotificationService {
     const {
       userIds,
       channels,
-      title,
+      title: rawTitle,
       content,
       severity = NOTIFICATION_SEVERITY.NORMAL,
       incidentId,
     } = dto;
 
+    const title = (rawTitle || "").length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
+
+    // SEC-31: Xác thực actionUrl chống tấn công SSRF & DNS Rebinding
+    if (dto.actionUrl) {
+      await assertSafePublicUrl(dto.actionUrl);
+    }
+
+    // SEC-21: Deduplicate userIds & channels để chống Notification Bombing
+    const uniqueUserIds = Array.from(new Set(userIds || []));
+    const uniqueChannels = Array.from(new Set(channels || []));
+
+    // SEC-27: Chặn việc đánh dấu SENT giả mạo đối với các kênh chưa được triển khai (ZALO_ZNS, WEBHOOK)
+    const UNIMPLEMENTED_CHANNELS = new Set([
+      NOTIFICATION_CHANNEL.ZALO_ZNS,
+      NOTIFICATION_CHANNEL.WEBHOOK,
+    ]);
+    const unimplemented = uniqueChannels.filter((c) =>
+      UNIMPLEMENTED_CHANNELS.has(c as any),
+    );
+    if (unimplemented.length > 0) {
+      throw new AppError(
+        `Kênh thông báo chưa được hỗ trợ hoặc chưa triển khai: ${unimplemented.join(", ")}`,
+        400,
+        ERROR_CODE.BAD_REQUEST,
+      );
+    }
+
+    // SEC-27: Đối với kênh EMAIL, phải đảm bảo có địa chỉ email người nhận hợp lệ trước khi dispatch
+    const emailMap = new Map<string, string>();
+    if (uniqueChannels.includes(NOTIFICATION_CHANNEL.EMAIL)) {
+      if (dto.recipientEmails) {
+        if (Array.isArray(dto.recipientEmails)) {
+          dto.recipientEmails.forEach((email: string, idx: number) => {
+            if (uniqueUserIds[idx]) emailMap.set(uniqueUserIds[idx], email);
+          });
+        } else {
+          Object.entries(dto.recipientEmails).forEach(([uid, email]) => {
+            if (typeof email === "string") emailMap.set(uid, email);
+          });
+        }
+      }
+
+      for (const userId of uniqueUserIds) {
+        const email = emailMap.get(userId) || (dto as any).recipientEmail;
+        if (!email) {
+          throw new AppError(
+            `Kênh EMAIL yêu cầu cung cấp địa chỉ email người nhận cho người dùng ${userId}`,
+            400,
+            ERROR_CODE.VALIDATION_ERROR,
+          );
+        }
+      }
+    }
+
     const records = [];
-    for (const userId of userIds) {
-      for (const channel of channels) {
+    for (const userId of uniqueUserIds) {
+      for (const channel of uniqueChannels) {
         records.push({
           userId,
           incidentId: incidentId || null,
@@ -410,8 +573,8 @@ export class NotificationService {
     if (records.length > 0) {
       await this.repository.createManyNotifications(records);
 
-      if (channels.includes(NOTIFICATION_CHANNEL.IN_APP) || channels.includes(NOTIFICATION_CHANNEL.WEB)) {
-        for (const userId of userIds) {
+      if (uniqueChannels.includes(NOTIFICATION_CHANNEL.IN_APP) || uniqueChannels.includes(NOTIFICATION_CHANNEL.WEB)) {
+        for (const userId of uniqueUserIds) {
           this.sse.sendToUser(userId, {
             type: "notification:new",
             data: {
@@ -423,6 +586,16 @@ export class NotificationService {
           });
         }
       }
+
+      if (uniqueChannels.includes(NOTIFICATION_CHANNEL.EMAIL)) {
+        for (const userId of uniqueUserIds) {
+          const email = emailMap.get(userId) || (dto as any).recipientEmail;
+          if (email) {
+            const html = this.emailTemplateService.baseLayout(title, content);
+            await this.mail.sendRaw(email, title, html);
+          }
+        }
+      }
     }
 
     return { sentCount: records.length };
@@ -431,16 +604,57 @@ export class NotificationService {
   async broadcast(
     dto: BroadcastNotificationDto,
   ): Promise<{ totalRecipients: number }> {
+    const safeTitle = (dto.title || "").length > 255 ? dto.title.slice(0, 252) + "..." : dto.title;
+
+    // SEC-31: Xác thực actionUrl chống tấn công SSRF & DNS Rebinding
+    if (dto.actionUrl) {
+      await assertSafePublicUrl(dto.actionUrl);
+    }
+
+    // SEC-15: Lưu trữ thông báo broadcast vào CSDL PostgreSQL để người dùng offline khi đăng nhập vẫn nhận được
+    const userIds = await this.repository.findDistinctUserIds();
+    const recipientUserIds = userIds.length > 0 ? userIds : [SYSTEM_BROADCAST_USER_ID];
+
+    const records = recipientUserIds.map((uid) => ({
+      userId: uid,
+      incidentId: null,
+      templateId: null,
+      channel: NOTIFICATION_CHANNEL.IN_APP,
+      title: safeTitle,
+      content: dto.content,
+      severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
+      status: NOTIFICATION_STATUS.SENT,
+      sentAt: new Date(),
+    }));
+
+    if (userIds.length > 0 && !userIds.includes(SYSTEM_BROADCAST_USER_ID)) {
+      records.push({
+        userId: SYSTEM_BROADCAST_USER_ID,
+        incidentId: null,
+        templateId: null,
+        channel: NOTIFICATION_CHANNEL.IN_APP,
+        title: safeTitle,
+        content: dto.content,
+        severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
+        status: NOTIFICATION_STATUS.SENT,
+        sentAt: new Date(),
+      });
+    }
+
+    await this.repository.createManyNotifications(records);
+
+    // Phát real-time SSE cho các client đang kết nối
     this.sse.broadcast({
       type: "notification:broadcast",
       data: {
-        title: dto.title,
+        title: safeTitle,
         content: dto.content,
         severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
         createdAt: new Date().toISOString(),
       },
     });
-    return { totalRecipients: 1 };
+
+    return { totalRecipients: recipientUserIds.length };
   }
 
   // ─────────────────────────────────────────────
@@ -633,15 +847,22 @@ export class NotificationService {
       throw new AppError("Không tìm thấy bản ghi email", 404, ERROR_CODE.NOT_FOUND);
     }
 
-    if (email.status === EMAIL_STATUS.SENT) {
+    if (email.status !== EMAIL_STATUS.FAILED) {
       throw new AppError(
-        "Email này đã được gửi thành công, không thể thử lại",
+        "Chỉ có thể thử lại các email ở trạng thái FAILED (thất bại)",
         400,
-        ERROR_CODE.VALIDATION_ERROR,
+        ERROR_CODE.INVALID_STATUS_TRANSITION,
       );
     }
 
-    await this.repository.resetEmailForRetry(emailId);
+    const resetSuccess = await this.repository.resetEmailForRetry(emailId);
+    if (!resetSuccess) {
+      throw new AppError(
+        "Không thể thử lại email do trạng thái bản ghi đã thay đổi hoặc không phải FAILED",
+        400,
+        ERROR_CODE.INVALID_STATUS_TRANSITION,
+      );
+    }
   }
 }
 

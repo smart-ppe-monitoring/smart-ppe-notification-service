@@ -7,6 +7,9 @@ export const NOTIFICATION_TYPE = {
   PPE_VIOLATION: "PPE_VIOLATION",
 } as const;
 
+/** UUID định danh đặc biệt đại diện cho thông báo toàn hệ thống (Broadcast Notification) */
+export const SYSTEM_BROADCAST_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 export type NotificationType = keyof typeof NOTIFICATION_TYPE;
 
 export const NOTIFICATION_PRIORITY = {

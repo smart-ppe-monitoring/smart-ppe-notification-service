@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import IORedis from "ioredis";
 import { envConfig } from "../../config/env.config";
+import { ERROR_CODE } from "../errors/error-code";
 
 export interface SseEvent<T = unknown> {
   type: string;
@@ -9,6 +11,7 @@ export interface SseEvent<T = unknown> {
 }
 
 interface RedisSseMessage {
+  originInstanceId?: string;
   target: "user" | "broadcast";
   userId?: string;
   event: SseEvent;
@@ -22,12 +25,19 @@ const isTestEnv =
   process.env.npm_lifecycle_event === "test";
 
 export class SseManagerService {
+  public static readonly MAX_STREAMS_PER_USER = 5;
+  public static readonly MAX_TOTAL_STREAMS = 5000;
+  private readonly instanceId: string = randomUUID();
   private readonly userStreams = new Map<string, Set<Response>>();
   private readonly globalStreams = new Set<Response>();
   private redisPublisher?: IORedis;
   private redisSubscriber?: IORedis;
   private isRedisAvailable = false;
   private heartbeatTimer?: NodeJS.Timeout;
+
+  public getInstanceId(): string {
+    return this.instanceId;
+  }
 
   constructor() {
     if (!isTestEnv && envConfig.redis.enabled) {
@@ -46,11 +56,7 @@ export class SseManagerService {
         enableReadyCheck: false,
         lazyConnect: true,
         retryStrategy: (times: number) => {
-          if (times > 2) {
-            this.isRedisAvailable = false;
-            return null;
-          }
-          return Math.min(times * 200, 500);
+          return Math.min(times * 200, 3000);
         },
       };
 
@@ -73,6 +79,10 @@ export class SseManagerService {
         if (channel === SSE_PUBSUB_CHANNEL) {
           try {
             const parsed = JSON.parse(message) as RedisSseMessage;
+            // SEC-29: Bỏ qua tin nhắn do chính instance này phát sinh để chống loop echo và trùng lặp sự kiện tới client
+            if (parsed.originInstanceId === this.instanceId) {
+              return;
+            }
             if (parsed.target === "user" && parsed.userId) {
               this.deliverToLocalUser(parsed.userId, parsed.event);
             } else if (parsed.target === "broadcast") {
@@ -141,6 +151,26 @@ export class SseManagerService {
    * Đăng ký một HTTP response stream làm kênh nhận Server-Sent Events cho User
    */
   registerClient(userId: string, res: Response, req: Request): void {
+    // SEC-26: Giới hạn số lượng kết nối SSE đồng thời trên mỗi user và trên toàn server để chống cạn kiệt socket & RAM Heap DoS
+    const userClients = this.userStreams.get(userId);
+    if (userClients && userClients.size >= SseManagerService.MAX_STREAMS_PER_USER) {
+      res.status(429).json({
+        success: false,
+        message: "Quá số lượng kết nối SSE đồng thời cho phép cho người dùng này",
+        code: ERROR_CODE.TOO_MANY_REQUESTS,
+      });
+      return;
+    }
+
+    if (this.getActiveConnectionCount() >= SseManagerService.MAX_TOTAL_STREAMS) {
+      res.status(503).json({
+        success: false,
+        message: "Hệ thống đã đạt giới hạn kết nối SSE thời gian thực",
+        code: ERROR_CODE.TOO_MANY_REQUESTS,
+      });
+      return;
+    }
+
     // 1. Thiết lập các HTTP Headers chuẩn SSE
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -187,8 +217,14 @@ export class SseManagerService {
    */
   sendToUser(userId: string, event: SseEvent): void {
     // 1. Nếu có Redis, broadcast lên channel để các pod khác trong cluster cùng nhận
+    // SEC-29: Kèm originInstanceId để pod phát hiện chính mình và tránh duplicate event echo
     if (this.isRedisAvailable && this.redisPublisher) {
-      const msg: RedisSseMessage = { target: "user", userId, event };
+      const msg: RedisSseMessage = {
+        originInstanceId: this.instanceId,
+        target: "user",
+        userId,
+        event,
+      };
       this.redisPublisher
         .publish(SSE_PUBSUB_CHANNEL, JSON.stringify(msg))
         .catch(() => {});
@@ -203,8 +239,13 @@ export class SseManagerService {
    */
   broadcast(event: SseEvent): void {
     // 1. Broadcast qua Redis cho toàn bộ cluster
+    // SEC-29: Kèm originInstanceId để pod phát hiện chính mình và tránh duplicate event echo
     if (this.isRedisAvailable && this.redisPublisher) {
-      const msg: RedisSseMessage = { target: "broadcast", event };
+      const msg: RedisSseMessage = {
+        originInstanceId: this.instanceId,
+        target: "broadcast",
+        event,
+      };
       this.redisPublisher
         .publish(SSE_PUBSUB_CHANNEL, JSON.stringify(msg))
         .catch(() => {});
@@ -243,11 +284,14 @@ export class SseManagerService {
 
   private sendRaw(res: Response, event: SseEvent): void {
     try {
+      // SEC-30: Lọc sạch ký tự CRLF (\r, \n) trong event.type và event.id để chống kỹ thuật SSE Stream Framing Injection
+      const sanitizedType = String(event.type || "message").replace(/[\r\n]/g, "");
       let payload = "";
       if (event.id) {
-        payload += `id: ${event.id}\n`;
+        const sanitizedId = String(event.id).replace(/[\r\n]/g, "");
+        payload += `id: ${sanitizedId}\n`;
       }
-      payload += `event: ${event.type}\n`;
+      payload += `event: ${sanitizedType}\n`;
       payload += `data: ${JSON.stringify(event.data)}\n\n`;
 
       res.write(payload);

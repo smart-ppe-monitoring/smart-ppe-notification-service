@@ -9,7 +9,10 @@ import {
 } from "./middlewares/error.middleware";
 import notificationRoute from "./modules/notification/notification.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
-import { requestIdMiddleware } from "./middlewares/request-id.middleware";
+import {
+  requestIdMiddleware,
+  requireGatewayOrigin,
+} from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
 import { buildOpenApiSpec } from "./config/openapi/openapi.registry";
@@ -105,14 +108,17 @@ if (envConfig.nodeEnv !== "production") {
 }
 
 // 4. Mount Notification Routes (dual-mount hỗ trợ cả prefix /api/v1/notifications và /notifications)
+// SEC-33: Gắn requireGatewayOrigin để bảo vệ API perimeter trước các truy cập nội bộ bỏ qua Traefik API Gateway
 notificationApp.use(
   "/api/v1/notifications",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   notificationRoute,
 );
 notificationApp.use(
   "/notifications",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   notificationRoute,
@@ -122,4 +128,5 @@ notificationApp.use(
 notificationApp.use(notFoundMiddleware);
 notificationApp.use(errorMiddleware);
 
+export { notificationApp };
 export default notificationApp;

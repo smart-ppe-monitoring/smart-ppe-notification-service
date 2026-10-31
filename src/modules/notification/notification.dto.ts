@@ -14,6 +14,7 @@ export interface ListNotificationsDto {
   channel?: string;
   incidentId?: string;
   type?: string;
+  search?: string;
   fromDate?: string;
   toDate?: string;
 }
@@ -69,6 +70,8 @@ export interface DispatchIncidentNotificationDto {
   detectedAt?: Date | string;
   recipientUserIds?: string[];
   channels?: NotificationChannel[];
+  recipientEmails?: Record<string, string> | string[];
+  recipientUsers?: Array<{ id: string; email?: string }>;
 }
 
 export interface DispatchIncidentNotificationResultDto {
@@ -212,6 +215,7 @@ export interface SendNotificationDto {
   metadata?: Record<string, unknown>;
   templateKey?: string;
   templateData?: Record<string, unknown>;
+  recipientEmails?: Record<string, string> | string[];
 }
 
 export interface BroadcastNotificationDto {
@@ -229,6 +233,7 @@ export interface ListEmailsDto {
   limit?: number;
   status?: string;
   toEmail?: string;
+  userId?: string;
 }
 
 export interface EmailItemDto {

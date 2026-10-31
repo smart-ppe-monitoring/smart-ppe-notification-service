@@ -11,6 +11,7 @@ try {
 import notificationApp from "./notification.app";
 import { envConfig } from "./config/env.config";
 import { emailWorker } from "./common/workers/email-worker";
+import { outboxWorker } from "./common/workers/outbox.worker";
 import { EventBusWorker } from "./common/workers/event-bus.worker";
 import { EVENT_BUS_CONSTANTS } from "./common/constants/event.constant";
 import { notificationSubscriber } from "./common/subscribers/notification.subscriber";
@@ -33,6 +34,12 @@ export const notificationEventBusWorker = new EventBusWorker(
   EVENT_BUS_CONSTANTS.NOTIFICATION_QUEUE_NAME,
 );
 
+// SEC-32: Khởi chạy worker cho events-backbone-queue để tiêu thụ các sự kiện PPE domain và Core events
+export const backboneEventBusWorker = new EventBusWorker(
+  eventBus,
+  EVENT_BUS_CONSTANTS.DEFAULT_QUEUE_NAME,
+);
+
 export const server = notificationApp.listen(PORT, async () => {
   console.log(
     `[Notification Service] Running on http://localhost:${PORT} in ${envConfig.nodeEnv} mode`,
@@ -41,12 +48,14 @@ export const server = notificationApp.listen(PORT, async () => {
   // 1. Đăng ký subscriber lắng nghe events từ Auth & Core services
   notificationSubscriber.register();
 
-  // 2. Khởi chạy EventBus worker (chuyên biệt cho notification queue) và Email worker
+  // 2. Khởi chạy EventBus workers, Outbox worker và Email worker
   notificationEventBusWorker.start();
+  backboneEventBusWorker.start();
+  outboxWorker.start();
   emailWorker.start();
 
   console.log(
-    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker and EmailWorker are active.",
+    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker, BackboneEventBusWorker, OutboxWorker and EmailWorker are active.",
   );
 });
 
@@ -95,9 +104,11 @@ export async function handleNotificationShutdown(
     await Promise.allSettled([
       emailWorker.stop(),
       notificationEventBusWorker.stop(),
+      backboneEventBusWorker.stop(),
+      outboxWorker.stop(),
     ]);
     console.log(
-      "[Notification Service] EmailWorker & NotificationEventBusWorker stopped.",
+      "[Notification Service] EmailWorker, EventBusWorkers & OutboxWorker stopped.",
     );
 
     // 4. Close SSE connections & EventBus
@@ -112,7 +123,7 @@ export async function handleNotificationShutdown(
     console.log("[Notification Service] Graceful shutdown completed cleanly.");
     clearTimeout(forceExitTimer);
     if (process.env.NODE_ENV !== "test") {
-      process.exit(0);
+      process.exit(signal === "uncaughtException" ? 1 : 0);
     }
   } catch (err: any) {
     console.error(
@@ -125,6 +136,17 @@ export async function handleNotificationShutdown(
     }
   }
 }
+
+// SEC-42: Đăng ký traps cho unhandledRejection và uncaughtException để ngăn chặn tiến trình crash đột ngột
+// và đảm bảo dọn dẹp tài nguyên (HTTP server, background workers, db connection, redis) an toàn (graceful shutdown).
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[Notification Service] Unhandled Promise Rejection:", reason);
+});
+
+process.on("uncaughtException", (error: Error) => {
+  console.error("[Notification Service] Uncaught Exception thrown:", error);
+  handleNotificationShutdown("uncaughtException");
+});
 
 process.on("SIGTERM", () => handleNotificationShutdown("SIGTERM"));
 process.on("SIGINT", () => handleNotificationShutdown("SIGINT"));

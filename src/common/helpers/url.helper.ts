@@ -1,4 +1,6 @@
 import dns from "node:dns";
+import { AppError } from "../errors/app-error";
+import { ERROR_CODE } from "../errors/error-code";
 
 /**
  * URL & SSRF Helper
@@ -205,8 +207,7 @@ export async function resolveAndValidateDns(
   hostname: string,
   options: DnsValidationOptions = {},
 ): Promise<DnsValidationResult> {
-  const allowPrivate =
-    options.allowPrivate ?? process.env.NODE_ENV !== "production";
+  const allowPrivate = options.allowPrivate ?? false;
 
   // 1. Nếu hostname là cú pháp IP thô hoặc localhost
   if (isPrivateOrReservedHost(hostname)) {
@@ -477,3 +478,40 @@ export async function resolveSafeRedirectChain(
     reason: `Maximum redirect limit (${maxRedirects}) exceeded`,
   };
 }
+
+/**
+ * SEC-31: Xác thực URL an toàn chống tấn công SSRF:
+ * 1. Kiểm tra cú pháp tĩnh (isPublicHttpUrl)
+ * 2. Phân giải DNS tại runtime (resolveAndValidateDns) chống DNS Rebinding
+ * 3. Kiểm tra chuỗi redirect HTTP 30x (resolveSafeRedirectChain) chống redirect về IP nội bộ / Cloud Metadata
+ */
+export async function assertSafePublicUrl(
+  urlStr: string,
+  options: SafeRedirectOptions = {},
+): Promise<void> {
+  if (!urlStr || typeof urlStr !== "string") {
+    throw new AppError("URL không hợp lệ hoặc bị trống", 400, ERROR_CODE.VALIDATION_ERROR);
+  }
+
+  const allowPrivate = options.allowPrivate ?? false;
+
+  if (!isPublicHttpUrl(urlStr, { allowPrivate })) {
+    throw new AppError(
+      "URL không hợp lệ hoặc trỏ về địa chỉ IP nội bộ bị chặn (SSRF)",
+      400,
+      ERROR_CODE.VALIDATION_ERROR,
+    );
+  }
+
+  if (!allowPrivate) {
+    const result = await resolveSafeRedirectChain(urlStr, options);
+    if (!result.isValid) {
+      throw new AppError(
+        `Phát hiện rủi ro SSRF: ${result.reason || "Địa chỉ đích không phải IP công khai an toàn"}`,
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+  }
+}
+

@@ -159,6 +159,8 @@ const envSchema = z
     RESEND_API_KEY: z.string().default(""),
     /** URL HTTP Webhook relay email (Tầng 2 - Port 443 e.g. Google Apps Script) */
     MAIL_WEBHOOK_URL: z.string().default(""),
+    /** Secret key dùng để ký HMAC SHA-256 bảo vệ toàn vẹn email webhook payload (SEC-13) */
+    MAIL_WEBHOOK_SECRET: z.string().default(""),
     MAIL_HOST: z.string().default("smtp.gmail.com"),
     MAIL_PORT: z.coerce.number().int().positive().default(587),
     MAIL_SECURE: z.string().default("false"),
@@ -261,19 +263,23 @@ const envSchema = z
   )
   .refine(
     (env) => {
+      // SEC-04: Satellite services ONLY require public key or JWKS URL in production to verify RS256 tokens offline.
+      // Master JWT_PRIVATE_KEY must NEVER be distributed to satellite containers.
       if (env.NODE_ENV !== "production") return true;
       if (env.JWT_ALGORITHM === "RS256") {
         return (
-          typeof env.JWT_PRIVATE_KEY === "string" &&
-          env.JWT_PRIVATE_KEY.trim().length > 0
+          (typeof env.JWT_PUBLIC_KEY === "string" &&
+            env.JWT_PUBLIC_KEY.trim().length > 0) ||
+          (typeof env.AUTH_JWKS_URL === "string" &&
+            env.AUTH_JWKS_URL.trim().length > 0)
         );
       }
       return true;
     },
     {
       message:
-        "JWT_PRIVATE_KEY bắt buộc phải được cấu hình khi JWT_ALGORITHM=RS256 trong môi trường production (định dạng PEM, base64 hoặc đường dẫn file)",
-      path: ["JWT_PRIVATE_KEY"],
+        "JWT_PUBLIC_KEY hoặc AUTH_JWKS_URL bắt buộc phải được cấu hình khi JWT_ALGORITHM=RS256 trong môi trường production cho dịch vụ vệ tinh",
+      path: ["JWT_PUBLIC_KEY"],
     },
   )
   .refine(
@@ -309,10 +315,12 @@ const _env = _parsed.data;
 
 /** Phân giải giá trị TRUST_PROXY sang kiểu mà Express chấp nhận */
 function parseTrustProxy(val: string): boolean | number | string | string[] {
-  if (val === "true") return true;
   if (val === "false") return false;
   if (/^\d+$/.test(val)) return parseInt(val, 10);
   if (val.includes(",")) return val.split(",").map((s) => s.trim());
+  // SEC-20: Tránh app.set('trust proxy', true) vì Express sẽ tin tưởng leftmost IP không kiểm soát.
+  // Khi biến môi trường để "true", chuyển thành 1 (chỉ tin tưởng 1 reverse proxy trực tiếp phía trước).
+  if (val === "true") return 1;
   return val;
 }
 
@@ -489,6 +497,7 @@ export const envConfig = {
     from: _env.MAIL_FROM,
     resendApiKey: _env.RESEND_API_KEY,
     webhookUrl: _env.MAIL_WEBHOOK_URL,
+    webhookSecret: _env.MAIL_WEBHOOK_SECRET,
   },
   turnstile: {
     enabled: _env.TURNSTILE_ENABLED === "true",

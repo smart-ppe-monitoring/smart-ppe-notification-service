@@ -51,6 +51,12 @@ export class EventBusService {
     EVENT_NAMES.AUTH_PASSWORD_RESET_REQUESTED,
     EVENT_NAMES.AUTH_NEW_DEVICE_DETECTED,
     EVENT_NAMES.AUTH_DEACTIVATION_REQUESTED,
+    EVENT_NAMES.PPE_VIOLATION_DETECTED,
+    EVENT_NAMES.PPE_INCIDENT_CREATED,
+    EVENT_NAMES.PPE_INCIDENT_ASSIGNED,
+    EVENT_NAMES.PPE_INCIDENT_RESOLVED,
+    EVENT_NAMES.PPE_CAMERA_STATUS_CHANGED,
+    EVENT_NAMES.PPE_SITE_ALERT_TRIGGERED,
   ]);
   private processedEventIds = new Map<string, number>(); // ID -> expiresAt
   private dlqEvents: DlqRecord[] = []; // In-memory DLQ store
@@ -80,11 +86,7 @@ export class EventBusService {
         enableReadyCheck: false,
         lazyConnect: true,
         retryStrategy: (times) => {
-          if (times > 2) {
-            this.isRedisAvailable = false;
-            return null;
-          }
-          return Math.min(times * 200, 500);
+          return Math.min(times * 200, 3000);
         },
       });
 
@@ -291,7 +293,7 @@ export class EventBusService {
    */
   public async dispatchDirectly(envelope: EventEnvelope): Promise<void> {
     // 1. Kiểm tra tính Idempotent: Nếu eventId đã được xử lý trong vòng 24h thì bỏ qua
-    if (this.isEventAlreadyProcessed(envelope.id)) {
+    if (await this.isEventAlreadyProcessed(envelope.id)) {
       console.log(
         `[EventBus] ⏭️ Duplicate event ${envelope.id} skipped (Idempotent protection)`,
       );
@@ -301,7 +303,7 @@ export class EventBusService {
     const handlers = this.handlers.get(envelope.name);
     if (!handlers || handlers.size === 0) {
       // Không có consumer đăng ký cho topic này
-      this.markEventProcessed(envelope.id);
+      await this.markEventProcessed(envelope.id);
       return;
     }
 
@@ -313,13 +315,25 @@ export class EventBusService {
     await Promise.all(handlerPromises);
 
     // 3. Đánh dấu đã xử lý thành công
-    this.markEventProcessed(envelope.id);
+    await this.markEventProcessed(envelope.id);
   }
 
   /**
    * Kiểm tra xem sự kiện đã từng được xử lý chưa (Idempotency Check)
+   * Kết hợp Redis phân tán (multi-pod) và In-Memory cache fallback (SEC-18).
    */
-  public isEventAlreadyProcessed(eventId: string): boolean {
+  public async isEventAlreadyProcessed(eventId: string): Promise<boolean> {
+    // 1. Kiểm tra Redis phân tán cho cụm multi-pod / replicas
+    if (this.isRedisAvailable && this.redisConnection) {
+      try {
+        const cached = await this.redisConnection.get(`idempotency:event:${eventId}`);
+        if (cached) return true;
+      } catch {
+        // Fallback sang in-memory nếu Redis trục trặc
+      }
+    }
+
+    // 2. Fallback sang In-Memory Cache
     const expiresAt = this.processedEventIds.get(eventId);
     if (!expiresAt) return false;
     if (Date.now() > expiresAt) {
@@ -329,8 +343,22 @@ export class EventBusService {
     return true;
   }
 
-  public markEventProcessed(eventId: string): void {
-    // Giới hạn bộ nhớ đệm tối đa 10.000 events
+  public async markEventProcessed(eventId: string): Promise<void> {
+    // 1. Ghi nhận vào Redis phân tán với TTL 24 giờ (SEC-18)
+    if (this.isRedisAvailable && this.redisConnection) {
+      try {
+        await this.redisConnection.set(
+          `idempotency:event:${eventId}`,
+          "1",
+          "EX",
+          Math.floor(EVENT_BUS_CONSTANTS.IDEMPOTENCY_TTL_MS / 1000),
+        );
+      } catch {
+        // Fallback
+      }
+    }
+
+    // 2. Ghi nhận vào In-Memory Cache
     if (this.processedEventIds.size >= 10000) {
       const now = Date.now();
       for (const [k, exp] of this.processedEventIds.entries()) {
@@ -446,37 +474,42 @@ export class EventBusService {
   }
 
   /**
-   * Mã hóa các trường dữ liệu nhạy cảm (verifyToken, resetToken) trong payload
-   * trước khi lưu vào bảng outbox_events nhằm chống rò rỉ token plain-text.
+   * Danh sách tên các trường dữ liệu nhạy cảm cần được mã hóa trước khi ghi vào Outbox CSDL
+   */
+  private static readonly SENSITIVE_FIELD_NAMES = new Set([
+    "verifytoken",
+    "resettoken",
+    "deactivationtoken",
+    "otp",
+    "code",
+    "temppassword",
+    "password",
+    "token",
+    "secret",
+    "refreshtoken",
+    "twofactorcode",
+    "verificationcode",
+  ]);
+
+  /**
+   * Mã hóa các trường dữ liệu nhạy cảm (tokens, OTP, password, secrets) trong payload
+   * trước khi lưu vào bảng outbox_events nhằm chống rò rỉ plain-text trong CSDL và Redis queue (SEC-09).
    */
   public encryptSensitivePayloadFields<T>(payload: T): T {
     if (!payload || typeof payload !== "object") return payload;
     const clone = { ...(payload as any) };
 
-    if ("verifyToken" in clone && typeof clone.verifyToken === "string") {
-      try {
-        clone.verifyToken = `enc:${encryptSecret(clone.verifyToken)}`;
-      } catch {
-        // Giữ nguyên nếu chưa có master key trong môi trường test
-      }
-    }
-
-    if ("resetToken" in clone && typeof clone.resetToken === "string") {
-      try {
-        clone.resetToken = `enc:${encryptSecret(clone.resetToken)}`;
-      } catch {
-        // Giữ nguyên nếu chưa có master key trong môi trường test
-      }
-    }
-
-    if (
-      "deactivationToken" in clone &&
-      typeof clone.deactivationToken === "string"
-    ) {
-      try {
-        clone.deactivationToken = `enc:${encryptSecret(clone.deactivationToken)}`;
-      } catch {
-        // Giữ nguyên nếu chưa có master key trong môi trường test
+    for (const key of Object.keys(clone)) {
+      if (
+        EventBusService.SENSITIVE_FIELD_NAMES.has(key.toLowerCase()) &&
+        typeof clone[key] === "string" &&
+        !clone[key].startsWith("enc:")
+      ) {
+        try {
+          clone[key] = `enc:${encryptSecret(clone[key])}`;
+        } catch {
+          // Giữ nguyên nếu chưa có master key trong môi trường test
+        }
       }
     }
 
@@ -490,41 +523,17 @@ export class EventBusService {
     if (!payload || typeof payload !== "object") return payload;
     const clone = { ...(payload as any) };
 
-    if (
-      "verifyToken" in clone &&
-      typeof clone.verifyToken === "string" &&
-      clone.verifyToken.startsWith("enc:")
-    ) {
-      try {
-        clone.verifyToken = decryptSecret(clone.verifyToken.slice(4));
-      } catch {
-        // Giữ nguyên nếu giải mã thất bại
-      }
-    }
-
-    if (
-      "resetToken" in clone &&
-      typeof clone.resetToken === "string" &&
-      clone.resetToken.startsWith("enc:")
-    ) {
-      try {
-        clone.resetToken = decryptSecret(clone.resetToken.slice(4));
-      } catch {
-        // Giữ nguyên nếu giải mã thất bại
-      }
-    }
-
-    if (
-      "deactivationToken" in clone &&
-      typeof clone.deactivationToken === "string" &&
-      clone.deactivationToken.startsWith("enc:")
-    ) {
-      try {
-        clone.deactivationToken = decryptSecret(
-          clone.deactivationToken.slice(4),
-        );
-      } catch {
-        // Giữ nguyên nếu giải mã thất bại
+    for (const key of Object.keys(clone)) {
+      if (
+        EventBusService.SENSITIVE_FIELD_NAMES.has(key.toLowerCase()) &&
+        typeof clone[key] === "string" &&
+        clone[key].startsWith("enc:")
+      ) {
+        try {
+          clone[key] = decryptSecret(clone[key].slice(4));
+        } catch {
+          // Giữ nguyên nếu giải mã thất bại
+        }
       }
     }
 

@@ -32,7 +32,7 @@ export function getSharedRateLimitRedisClient(): IORedis | null {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
-      retryStrategy: () => null, // Không thử lại vô hạn để tránh treo event loop
+      retryStrategy: (times) => Math.min(times * 100, 2000), // SEC-37: Tự động kết nối lại có backoff để chống mất rate limiter vĩnh viễn khi boot
     });
 
     sharedRedisClient.on("connect", () => {
@@ -80,7 +80,10 @@ export function createRateLimiter(options: RateLimitOptions = {}) {
     next: NextFunction,
   ): void | Promise<void> => {
     const clientIp = req.ip || req.socket.remoteAddress || "unknown";
-    const routePrefix = req.baseUrl || req.path || "";
+    const rawPrefix = req.baseUrl || req.path || "";
+    // Chuẩn hóa tiền tố đường dẫn (loại bỏ /api/v1) để các mount points song song
+    // (ví dụ /api/v1/notifications và /notifications) cùng chia sẻ một quota bucket (SEC-25).
+    const routePrefix = rawPrefix.replace(/^\/api\/v1/, "") || "/";
     const key = options.keyGenerator
       ? options.keyGenerator(req)
       : `${clientIp}:${routePrefix}`;

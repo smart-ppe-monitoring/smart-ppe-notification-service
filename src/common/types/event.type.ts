@@ -80,6 +80,17 @@ export interface PPEIncidentAssignedPayload {
   assignedBy?: string;
 }
 
+export interface AuditActionCreatedPayload {
+  userId?: string | null;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  details?: Record<string, unknown>;
+  ipAddress?: string;
+  userAgent?: string;
+  timestamp: string;
+}
+
 export interface EventPayloadMap {
   "auth.user_registered": UserRegisteredPayload;
   "auth.verification_requested": VerificationRequestedPayload;
@@ -94,6 +105,7 @@ export interface EventPayloadMap {
   "ppe.incident.resolved": PPEIncidentResolvedPayload;
   "ppe.camera.status_changed": PPECameraStatusChangedPayload;
   "ppe.site.alert_triggered": PPESiteAlertTriggeredPayload;
+  "audit.action.created": AuditActionCreatedPayload;
 }
 
 export interface EventEnvelope<T = unknown> {

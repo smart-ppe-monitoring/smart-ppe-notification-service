@@ -5,6 +5,29 @@ import { AppError } from "../common/errors/app-error";
 import { ERROR_CODE } from "../common/errors/error-code";
 import { JWT_PURPOSE, JWT_ALGORITHM } from "../common/constants/jwt.constant";
 
+/**
+ * SEC-39: Danh sách các endpoint stream hợp lệ được phép nhận query ticket / token.
+ * Tuyệt đối không dùng hậu tố lỏng lẻo cleanPath.endsWith('/stream') để tránh rò rỉ token qua URL ở các route khác (như /templates/:code).
+ */
+export const ALLOWED_STREAM_ENDPOINTS = new Set([
+  "/api/v1/notifications/stream",
+  "/notifications/stream",
+  "/stream",
+]);
+
+export function isStreamEndpoint(req: Request): boolean {
+  const path = req.path || "";
+  const originalUrl = (req.originalUrl || "").split("?")[0];
+  const baseUrl = req.baseUrl || "";
+  const combined = (baseUrl + path).split("?")[0];
+
+  return (
+    ALLOWED_STREAM_ENDPOINTS.has(combined) ||
+    ALLOWED_STREAM_ENDPOINTS.has(originalUrl) ||
+    ALLOWED_STREAM_ENDPOINTS.has(path)
+  );
+}
+
 export function extractTokenFromRequest(req: Request): string | undefined {
   let token = req.cookies?.accessToken;
   if (!token) {
@@ -14,13 +37,9 @@ export function extractTokenFromRequest(req: Request): string | undefined {
     }
   }
 
-  const cleanPath = (
-    (req.baseUrl || "") + (req.path || req.originalUrl || "")
-  ).split("?")[0];
-  const isAllowedQueryTokenEndpoint =
-    cleanPath.endsWith("/stream") || cleanPath.endsWith("/download");
+  const isAllowedQueryToken = isStreamEndpoint(req);
 
-  if (!token && isAllowedQueryTokenEndpoint) {
+  if (!token && isAllowedQueryToken) {
     const queryToken = req.query?.ticket || req.query?.token;
     if (typeof queryToken === "string") {
       token = queryToken;
@@ -34,13 +53,9 @@ export async function authMiddleware(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const cleanPath = (
-    (req.baseUrl || "") + (req.path || req.originalUrl || "")
-  ).split("?")[0];
-  const isAllowedQueryTokenEndpoint =
-    cleanPath.endsWith("/stream") || cleanPath.endsWith("/download");
+  const isAllowedQueryToken = isStreamEndpoint(req);
 
-  if (!isAllowedQueryTokenEndpoint && req.query?.token) {
+  if (!isAllowedQueryToken && req.query?.token) {
     next(
       new AppError(
         "Không được phép truyền token xác thực qua query string trên API thông thường để tránh rò rỉ qua log và browser history",
@@ -58,7 +73,7 @@ export async function authMiddleware(
     return;
   }
 
-  const isStreamPath = cleanPath.endsWith("/stream");
+  const isStreamPath = isAllowedQueryToken;
 
   try {
     let payload: any;
@@ -127,12 +142,47 @@ export async function authMiddleware(
       return;
     }
 
+    // SEC-02: Chặn token tạm thời (2FA verification / temp token) hoặc token sai mục đích truy cập tài nguyên bảo vệ
+    if (
+      payload.purpose === JWT_PURPOSE.TWO_FACTOR ||
+      payload.type === "TEMP" ||
+      (payload.purpose &&
+        payload.purpose !== JWT_PURPOSE.ACCESS &&
+        !(isStreamPath && payload.purpose === JWT_PURPOSE.SSE_STREAM_TICKET))
+    ) {
+      next(
+        new AppError(
+          "Token không hợp lệ để truy cập tài nguyên được bảo vệ",
+          401,
+          ERROR_CODE.UNAUTHORIZED,
+        ),
+      );
+      return;
+    }
+
+    // SEC-08: Chặn token có cờ mustChangePassword truy cập satellite services
+    if (
+      payload.mustChangePassword === true ||
+      payload.mustChangePassword === "true"
+    ) {
+      next(
+        new AppError(
+          "Bạn bắt buộc phải đổi mật khẩu trước khi thực hiện các thao tác khác trên hệ thống",
+          403,
+          ERROR_CODE.FORBIDDEN,
+        ),
+      );
+      return;
+    }
+
     req.user = {
       id: payload.id || payload.sub,
       email: payload.email,
       role: payload.role,
       roleId: payload.roleId,
-      permissions: Array.isArray(payload.permissions) ? payload.permissions : [],
+      permissions: Array.isArray(payload.permissions)
+        ? payload.permissions
+        : undefined,
     };
 
     next();

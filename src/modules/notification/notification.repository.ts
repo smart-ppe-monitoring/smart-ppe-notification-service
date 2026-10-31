@@ -11,12 +11,15 @@ import {
   NOTIFICATION_TEMPLATE_STATUS,
   EMAIL_STATUS,
   EMAIL_MAX_ATTEMPTS,
+  SYSTEM_BROADCAST_USER_ID,
 } from "../../common/constants/notification.constant";
 import {
   calculatePaginationSkip,
   formatPaginationMeta,
 } from "../../common/helpers/pagination.helper";
 import { isUuid } from "../../common/helpers/uuid.helper";
+import { eventBus } from "../../common/services/event-bus.service";
+import { EVENT_NAMES } from "../../common/constants/event.constant";
 import {
   ListNotificationsDto,
   ListEmailsDto,
@@ -49,11 +52,51 @@ export class NotificationRepository {
   // ─────────────────────────────────────────────
 
   async findMany(userId: string, dto: ListNotificationsDto) {
-    const { isRead, status, severity, channel, incidentId, fromDate, toDate } = dto;
+    const { isRead, status, severity, channel, incidentId, type, search, fromDate, toDate } = dto;
     const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
 
+    // SEC-41: Loại bỏ các thông báo đã bị soft delete (deletedAt !== null)
+    // SEC-38: Tích hợp đầy đủ bộ lọc tìm kiếm search (title, content) và type (ALERT, NOTIFICATION, template code)
+    const andConditions: NotificationPrisma.NotificationWhereInput[] = [
+      {
+        OR: [
+          { userId },
+          { userId: SYSTEM_BROADCAST_USER_ID },
+        ],
+      },
+      { deletedAt: null },
+    ];
+
+    if (search) {
+      andConditions.push({
+        OR: [
+          { title: { contains: search, mode: "insensitive" } },
+          { content: { contains: search, mode: "insensitive" } },
+        ],
+      });
+    }
+
+    if (type) {
+      if (type.toUpperCase() === "ALERT") {
+        andConditions.push({
+          severity: { in: [NOTIFICATION_SEVERITY.HIGH, NOTIFICATION_SEVERITY.CRITICAL] },
+        });
+      } else if (type.toUpperCase() === "NOTIFICATION") {
+        andConditions.push({
+          severity: { in: [NOTIFICATION_SEVERITY.LOW, NOTIFICATION_SEVERITY.NORMAL, NOTIFICATION_SEVERITY.MEDIUM] },
+        });
+      } else {
+        andConditions.push({
+          OR: [
+            { severity: type },
+            { template: { code: type } },
+          ],
+        });
+      }
+    }
+
     const where: NotificationPrisma.NotificationWhereInput = {
-      userId,
+      AND: andConditions,
     };
 
     if (isRead !== undefined) {
@@ -133,13 +176,14 @@ export class NotificationRepository {
     return this.db.notification.count({
       where: {
         userId,
+        deletedAt: null,
         status: { not: NOTIFICATION_STATUS.READ },
       },
     });
   }
 
   async findOne(id: string, userId?: string) {
-    const where: NotificationPrisma.NotificationWhereInput = { id };
+    const where: NotificationPrisma.NotificationWhereInput = { id, deletedAt: null };
     if (userId) {
       where.userId = userId;
     }
@@ -160,7 +204,8 @@ export class NotificationRepository {
       where: {
         id,
         userId,
-        status: { not: NOTIFICATION_STATUS.READ },
+        deletedAt: null,
+        status: { in: [NOTIFICATION_STATUS.SENT, "DELIVERED"] },
       },
       data: {
         status: NOTIFICATION_STATUS.READ,
@@ -169,11 +214,13 @@ export class NotificationRepository {
     });
   }
 
+  // SEC-40: Chỉ chuyển trạng thái SENT / DELIVERED sang READ; không ghi đè trạng thái FAILED và PENDING
   async markAllAsRead(userId: string) {
     return this.db.notification.updateMany({
       where: {
         userId,
-        status: { not: NOTIFICATION_STATUS.READ },
+        deletedAt: null,
+        status: { in: [NOTIFICATION_STATUS.SENT, "DELIVERED"] },
       },
       data: {
         status: NOTIFICATION_STATUS.READ,
@@ -182,9 +229,13 @@ export class NotificationRepository {
     });
   }
 
+  // SEC-41: Áp dụng Soft Delete để bảo tồn dữ liệu và ngăn chặn việc xóa lan truyền (Cascade Delete) làm mất nhật ký phân phát
   async delete(id: string, userId: string) {
-    return this.db.notification.deleteMany({
-      where: { id, userId },
+    return this.db.notification.updateMany({
+      where: { id, userId, deletedAt: null },
+      data: {
+        deletedAt: new Date(),
+      },
     });
   }
 
@@ -250,6 +301,36 @@ export class NotificationRepository {
     return this.db.notification.createMany({
       data: validData,
     });
+  }
+
+  /**
+   * Truy vấn danh sách các User ID duy nhất đã từng có tương tác trong hệ thống
+   * phục vụ lưu trữ thông báo phát thanh (Broadcast Persistence - SEC-15).
+   */
+  async findDistinctUserIds(): Promise<string[]> {
+    const [prefs, notifs] = await Promise.all([
+      this.db.notificationPreference.findMany({
+        select: { userId: true },
+        distinct: ["userId"],
+      }),
+      this.db.notification.findMany({
+        select: { userId: true },
+        distinct: ["userId"],
+        take: 1000,
+      }),
+    ]);
+    const userSet = new Set<string>();
+    prefs.forEach((p) => {
+      if (p.userId && isUuid(p.userId) && p.userId !== SYSTEM_BROADCAST_USER_ID) {
+        userSet.add(p.userId);
+      }
+    });
+    notifs.forEach((n) => {
+      if (n.userId && isUuid(n.userId) && n.userId !== SYSTEM_BROADCAST_USER_ID) {
+        userSet.add(n.userId);
+      }
+    });
+    return Array.from(userSet);
   }
 
   // ─────────────────────────────────────────────
@@ -425,7 +506,19 @@ export class NotificationRepository {
       WHERE id IN (
         SELECT id FROM email_notifications
         WHERE (
-          status = ${EMAIL_STATUS.PENDING}
+          (
+            status = ${EMAIL_STATUS.PENDING}
+            AND (
+              attempts = 0
+              OR updated_at <= NOW() - (
+                CASE
+                  WHEN attempts = 1 THEN INTERVAL '30 seconds'
+                  WHEN attempts = 2 THEN INTERVAL '120 seconds'
+                  ELSE INTERVAL '300 seconds'
+                END
+              )
+            )
+          )
           OR (status = ${EMAIL_STATUS.PROCESSING} AND updated_at < NOW() - INTERVAL '15 minutes')
         )
         AND attempts < ${EMAIL_MAX_ATTEMPTS}
@@ -480,6 +573,7 @@ export class NotificationRepository {
     const where: any = {};
     if (dto.status) where.status = dto.status;
     if (dto.toEmail) where.toEmail = { contains: dto.toEmail, mode: "insensitive" };
+    if (dto.userId) where.userId = dto.userId;
 
     const [items, total] = await Promise.all([
       (notificationPrisma as any).emailNotification.findMany({
@@ -497,15 +591,19 @@ export class NotificationRepository {
     };
   }
 
-  async resetEmailForRetry(id: string) {
-    return (notificationPrisma as any).emailNotification.update({
-      where: { id },
+  async resetEmailForRetry(id: string): Promise<boolean> {
+    const result = await (notificationPrisma as any).emailNotification.updateMany({
+      where: {
+        id,
+        status: EMAIL_STATUS.FAILED,
+      },
       data: {
         status: EMAIL_STATUS.PENDING,
         attempts: 0,
         lastError: null,
       },
     });
+    return result.count > 0;
   }
 
   async createAuditLog(params: {
@@ -518,8 +616,34 @@ export class NotificationRepository {
     userAgent?: string;
   }) {
     if (!params.actorId || !isUuid(params.actorId)) return null;
+
+    try {
+      await eventBus.publish(
+        EVENT_NAMES.AUDIT_ACTION_CREATED,
+        {
+          userId: params.actorId,
+          action: params.action,
+          targetType: params.targetType,
+          targetId: params.targetId || null,
+          details: params.details || {},
+          ipAddress: params.ipAddress,
+          userAgent: params.userAgent,
+          timestamp: new Date().toISOString(),
+        },
+        { useOutbox: false },
+      );
+    } catch (err: any) {
+      console.warn(`[AuditLog] Failed to publish audit event:`, err?.message || err);
+    }
+
     console.log(`[AuditLog] ${params.action} on ${params.targetType}:${params.targetId}`);
-    return null;
+    return {
+      actorId: params.actorId,
+      action: params.action,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      timestamp: new Date(),
+    };
   }
 }
 

@@ -35,6 +35,9 @@ export const mailConfig = {
   get mailWebhookUrl(): string {
     return process.env.MAIL_WEBHOOK_URL || envConfig.mail.webhookUrl;
   },
+  get webhookSecret(): string {
+    return process.env.MAIL_WEBHOOK_SECRET || envConfig.mail.webhookSecret;
+  },
   get isConfigured(): boolean {
     return Boolean(
       this.resendApiKey ||
