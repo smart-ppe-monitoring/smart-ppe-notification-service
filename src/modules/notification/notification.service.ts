@@ -448,6 +448,9 @@ export class NotificationService {
   // User Notification Preferences Management
   // ─────────────────────────────────────────────
 
+  // SEC-44: Tuân thủ chuẩn phương thức HTTP an toàn (Safe Methods RFC 7231).
+  // GET /preferences chỉ đọc dữ liệu, tuyệt đối không được phép ghi (upsert) vào CSDL nếu người dùng chưa có cấu hình.
+  // Trả về cấu hình đã lưu kết hợp với cấu hình mặc định (in-memory) cho các kênh còn thiếu mà không gây side-effect.
   async getUserPreferences(userId: string): Promise<NotificationPreferenceDto[]> {
     const preferences = await this.repository.findUserPreferences(userId);
     const existingChannels = new Set(preferences.map((p) => p.channel));
@@ -455,13 +458,15 @@ export class NotificationService {
 
     for (const def of DEFAULT_PREFERENCES) {
       if (!existingChannels.has(def.channel)) {
-        const created = await this.repository.upsertPreference(
+        merged.push({
+          id: `default-${userId}-${def.channel}`,
           userId,
-          def.channel,
-          def.enabled,
-          def.severityThreshold,
-        );
-        merged.push(created);
+          channel: def.channel,
+          enabled: def.enabled,
+          severityThreshold: def.severityThreshold,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        });
       }
     }
 

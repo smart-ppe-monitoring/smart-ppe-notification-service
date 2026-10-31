@@ -123,7 +123,7 @@ export async function handleNotificationShutdown(
     console.log("[Notification Service] Graceful shutdown completed cleanly.");
     clearTimeout(forceExitTimer);
     if (process.env.NODE_ENV !== "test") {
-      process.exit(0);
+      process.exit(signal === "uncaughtException" ? 1 : 0);
     }
   } catch (err: any) {
     console.error(
@@ -136,6 +136,17 @@ export async function handleNotificationShutdown(
     }
   }
 }
+
+// SEC-42: Đăng ký traps cho unhandledRejection và uncaughtException để ngăn chặn tiến trình crash đột ngột
+// và đảm bảo dọn dẹp tài nguyên (HTTP server, background workers, db connection, redis) an toàn (graceful shutdown).
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[Notification Service] Unhandled Promise Rejection:", reason);
+});
+
+process.on("uncaughtException", (error: Error) => {
+  console.error("[Notification Service] Uncaught Exception thrown:", error);
+  handleNotificationShutdown("uncaughtException");
+});
 
 process.on("SIGTERM", () => handleNotificationShutdown("SIGTERM"));
 process.on("SIGINT", () => handleNotificationShutdown("SIGINT"));

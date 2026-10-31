@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { NotificationController, notificationController } from "./notification.controller";
 import { authMiddleware } from "../../middlewares/auth.middleware";
+import { authRateLimitMiddleware } from "../../middlewares/rate-limit.middleware";
 import { requirePermission, requireAnyPermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
 import {
@@ -30,7 +31,12 @@ router.use(authMiddleware);
 // ─────────────────────────────────────────────
 // Realtime SSE Stream & Ticket
 // ─────────────────────────────────────────────
-router.post("/stream-ticket", controller.createStreamTicket);
+// SEC-43: Gắn authRateLimitMiddleware để bảo vệ endpoint nhạy cảm cấp vé SSE stream khỏi brute-force / DoS tràn bộ nhớ cache
+router.post(
+  "/stream-ticket",
+  authRateLimitMiddleware,
+  controller.createStreamTicket,
+);
 router.get("/stream", controller.stream);
 
 // ─────────────────────────────────────────────
