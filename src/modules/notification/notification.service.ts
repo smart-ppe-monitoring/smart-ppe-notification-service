@@ -427,6 +427,49 @@ export class NotificationService {
     const uniqueUserIds = Array.from(new Set(userIds || []));
     const uniqueChannels = Array.from(new Set(channels || []));
 
+    // SEC-27: Chặn việc đánh dấu SENT giả mạo đối với các kênh chưa được triển khai (ZALO_ZNS, WEBHOOK)
+    const UNIMPLEMENTED_CHANNELS = new Set([
+      NOTIFICATION_CHANNEL.ZALO_ZNS,
+      NOTIFICATION_CHANNEL.WEBHOOK,
+    ]);
+    const unimplemented = uniqueChannels.filter((c) =>
+      UNIMPLEMENTED_CHANNELS.has(c as any),
+    );
+    if (unimplemented.length > 0) {
+      throw new AppError(
+        `Kênh thông báo chưa được hỗ trợ hoặc chưa triển khai: ${unimplemented.join(", ")}`,
+        400,
+        ERROR_CODE.BAD_REQUEST,
+      );
+    }
+
+    // SEC-27: Đối với kênh EMAIL, phải đảm bảo có địa chỉ email người nhận hợp lệ trước khi dispatch
+    const emailMap = new Map<string, string>();
+    if (uniqueChannels.includes(NOTIFICATION_CHANNEL.EMAIL)) {
+      if (dto.recipientEmails) {
+        if (Array.isArray(dto.recipientEmails)) {
+          dto.recipientEmails.forEach((email: string, idx: number) => {
+            if (uniqueUserIds[idx]) emailMap.set(uniqueUserIds[idx], email);
+          });
+        } else {
+          Object.entries(dto.recipientEmails).forEach(([uid, email]) => {
+            if (typeof email === "string") emailMap.set(uid, email);
+          });
+        }
+      }
+
+      for (const userId of uniqueUserIds) {
+        const email = emailMap.get(userId) || (dto as any).recipientEmail;
+        if (!email) {
+          throw new AppError(
+            `Kênh EMAIL yêu cầu cung cấp địa chỉ email người nhận cho người dùng ${userId}`,
+            400,
+            ERROR_CODE.VALIDATION_ERROR,
+          );
+        }
+      }
+    }
+
     const records = [];
     for (const userId of uniqueUserIds) {
       for (const channel of uniqueChannels) {
@@ -458,6 +501,16 @@ export class NotificationService {
               createdAt: new Date().toISOString(),
             },
           });
+        }
+      }
+
+      if (uniqueChannels.includes(NOTIFICATION_CHANNEL.EMAIL)) {
+        for (const userId of uniqueUserIds) {
+          const email = emailMap.get(userId) || (dto as any).recipientEmail;
+          if (email) {
+            const html = this.emailTemplateService.baseLayout(title, content);
+            await this.mail.sendRaw(email, title, html);
+          }
         }
       }
     }

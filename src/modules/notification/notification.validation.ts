@@ -123,6 +123,9 @@ export const sendNotificationSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   templateKey: z.string().optional(),
   templateData: z.record(z.unknown()).optional(),
+  recipientEmails: z
+    .union([z.record(z.string().email()), z.array(z.string().email())])
+    .optional(),
 });
 
 export const broadcastNotificationSchema = z.object({

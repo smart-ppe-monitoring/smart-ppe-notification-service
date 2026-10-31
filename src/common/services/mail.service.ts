@@ -6,6 +6,8 @@ import { mailConfig } from "../../config/mail.config";
 import { formatVietnamDateTime } from "../helpers/date.helper";
 import { escapeHtml } from "../helpers/template.helper";
 import { NOTIFICATION_SEVERITY } from "../constants/notification.constant";
+import { AppError } from "../errors/app-error";
+import { ERROR_CODE } from "../errors/error-code";
 
 // Force IPv4-first resolution in Node.js runtime to prevent ENETUNREACH on platforms without IPv6 routing (e.g. Render, Railway, Docker)
 try {
@@ -236,12 +238,17 @@ export class MailService {
     };
 
     if (!mailConfig.isConfigured) {
-      if (envConfig.nodeEnv !== "production") {
-        console.warn("-------- EMAIL VERIFICATION TOKEN (DEV MODE) --------");
-        console.warn(`To: ${email}`);
-        console.warn(`Link: ${verificationUrl}`);
-        console.warn("----------------------------------------------------");
+      if (envConfig.nodeEnv === "production") {
+        throw new AppError(
+          "Dịch vụ gửi email chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
+        );
       }
+      console.warn("-------- EMAIL VERIFICATION TOKEN (DEV MODE) --------");
+      console.warn(`To: ${email}`);
+      console.warn(`Link: ${verificationUrl}`);
+      console.warn("----------------------------------------------------");
       return;
     }
 
@@ -289,12 +296,17 @@ export class MailService {
     };
 
     if (!mailConfig.isConfigured) {
-      if (envConfig.nodeEnv !== "production") {
-        console.warn("-------- EMAIL PASSWORD RESET TOKEN (DEV MODE) --------");
-        console.warn(`To: ${email}`);
-        console.warn(`Link: ${resetUrl}`);
-        console.warn("-------------------------------------------------------");
+      if (envConfig.nodeEnv === "production") {
+        throw new AppError(
+          "Dịch vụ gửi email chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
+        );
       }
+      console.warn("-------- EMAIL PASSWORD RESET TOKEN (DEV MODE) --------");
+      console.warn(`To: ${email}`);
+      console.warn(`Link: ${resetUrl}`);
+      console.warn("-------------------------------------------------------");
       return;
     }
 
@@ -355,14 +367,19 @@ export class MailService {
     };
 
     if (!mailConfig.isConfigured) {
-      if (envConfig.nodeEnv !== "production") {
-        console.warn("-------- NEW DEVICE ALERT EMAIL (DEV MODE) --------");
-        console.warn(`To: ${email}`);
-        console.warn(`Device: ${details.deviceName}`);
-        console.warn(`IP: ${details.ipAddress}`);
-        console.warn(`Time: ${formattedDate}`);
-        console.warn("----------------------------------------------------");
+      if (envConfig.nodeEnv === "production") {
+        throw new AppError(
+          "Dịch vụ gửi email chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
+        );
       }
+      console.warn("-------- NEW DEVICE ALERT EMAIL (DEV MODE) --------");
+      console.warn(`To: ${email}`);
+      console.warn(`Device: ${details.deviceName}`);
+      console.warn(`IP: ${details.ipAddress}`);
+      console.warn(`Time: ${formattedDate}`);
+      console.warn("----------------------------------------------------");
       return;
     }
 
@@ -419,17 +436,22 @@ export class MailService {
     };
 
     if (!mailConfig.isConfigured) {
-      if (envConfig.nodeEnv !== "production") {
-        console.warn(
-          "-------- EMAIL ACCOUNT DEACTIVATION TOKEN (DEV MODE) --------",
-        );
-        console.warn(`To: ${email}`);
-        console.warn(`Token: ${token}`);
-        console.warn(`Link: ${deactivationUrl}`);
-        console.warn(
-          "--------------------------------------------------------------",
+      if (envConfig.nodeEnv === "production") {
+        throw new AppError(
+          "Dịch vụ gửi email chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
         );
       }
+      console.warn(
+        "-------- EMAIL ACCOUNT DEACTIVATION TOKEN (DEV MODE) --------",
+      );
+      console.warn(`To: ${email}`);
+      console.warn(`Token: ${token}`);
+      console.warn(`Link: ${deactivationUrl}`);
+      console.warn(
+        "--------------------------------------------------------------",
+      );
       return;
     }
 
@@ -490,14 +512,19 @@ export class MailService {
     };
 
     if (!mailConfig.isConfigured) {
-      if (envConfig.nodeEnv !== "production") {
-        console.warn("-------- OTP EMAIL (DEV MODE) --------");
-        console.warn(`To: ${email}`);
-        console.warn(`Purpose: ${purpose}`);
-        console.warn(`OTP: ${otp}`);
-        console.warn(`Expires In: ${formattedMinutes} minutes`);
-        console.warn("---------------------------------------");
+      if (envConfig.nodeEnv === "production") {
+        throw new AppError(
+          "Dịch vụ gửi email chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
+        );
       }
+      console.warn("-------- OTP EMAIL (DEV MODE) --------");
+      console.warn(`To: ${email}`);
+      console.warn(`Purpose: ${purpose}`);
+      console.warn(`OTP: ${otp}`);
+      console.warn(`Expires In: ${formattedMinutes} minutes`);
+      console.warn("---------------------------------------");
       return;
     }
 
@@ -528,12 +555,17 @@ export class MailService {
     };
 
     if (!mailConfig.isConfigured) {
-      if (envConfig.nodeEnv !== "production") {
-        console.warn("-------- RAW EMAIL (DEV MODE) --------");
-        console.warn(`To: ${to}`);
-        console.warn(`Subject: ${subject}`);
-        console.warn("--------------------------------------");
+      if (envConfig.nodeEnv === "production") {
+        throw new AppError(
+          "Dịch vụ gửi email chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
+        );
       }
+      console.warn("-------- RAW EMAIL (DEV MODE) --------");
+      console.warn(`To: ${to}`);
+      console.warn(`Subject: ${subject}`);
+      console.warn("--------------------------------------");
       return;
     }
 
