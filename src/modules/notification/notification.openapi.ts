@@ -51,6 +51,35 @@ export function registerNotificationOpenApi(): void {
 
   // ── Web Notifications ────────────────────────────────────────────────────────
 
+  // POST /notifications/stream-ticket
+  openapiRegistry.registerPath({
+    method: "post",
+    path: "/notifications/stream-ticket",
+    tags: ["Notifications"],
+    summary: "Tạo vé một lần (One-Time Ticket) để kết nối xác thực Server-Sent Events (SSE)",
+    security: [{ BearerAuth: [] }],
+    responses: {
+      200: {
+        description: "Tạo ticket thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean().openapi({ example: true }),
+              data: z.object({
+                ticket: z.string().openapi({ example: "st_01923456789abcdef" }),
+                expiresIn: z.number().openapi({ example: 60 }),
+              }),
+              message: z.string().openapi({ example: "Stream ticket generated successfully" }),
+            }),
+          },
+        },
+      },
+      401: {
+        description: "Chưa xác thực (Yêu cầu JWT)",
+      },
+    },
+  });
+
   // GET /notifications/stream
   openapiRegistry.registerPath({
     method: "get",
