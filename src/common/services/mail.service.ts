@@ -612,6 +612,7 @@ export class MailService {
       siteName?: string;
       detectedAt?: Date | string;
       evidenceUrl?: string;
+      referenceEvidenceUrl?: string;
       description?: string;
     },
   ): Promise<void> {
@@ -669,12 +670,28 @@ export class MailService {
         </table>
 
         ${
-          data.evidenceUrl
-            ? `<div style="text-align: center; margin: 25px 0;">
-                 <img src="${escapeHtml(data.evidenceUrl)}" alt="Hình ảnh bằng chứng" style="max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #cbd5e1;" />
-                 <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Hình ảnh bằng chứng trích xuất từ AI Vision</p>
+          data.referenceEvidenceUrl && data.evidenceUrl
+            ? `<div style="margin: 25px 0;">
+                 <table style="width: 100%; border-collapse: collapse;">
+                   <tr>
+                     <td style="width: 50%; padding: 5px; text-align: center; vertical-align: top;">
+                       <span style="display: inline-block; font-size: 11px; font-weight: bold; color: #166534; background-color: #dcfce7; padding: 3px 8px; border-radius: 4px; margin-bottom: 6px;">📷 ẢNH ĐỐI CHỨNG (TRƯỚC ĐÓ)</span>
+                       <img src="${escapeHtml(data.referenceEvidenceUrl)}" alt="Ảnh đối chứng" style="width: 100%; max-width: 270px; height: auto; border-radius: 6px; border: 1px solid #86efac;" />
+                     </td>
+                     <td style="width: 50%; padding: 5px; text-align: center; vertical-align: top;">
+                       <span style="display: inline-block; font-size: 11px; font-weight: bold; color: #991b1b; background-color: #fee2e2; padding: 3px 8px; border-radius: 4px; margin-bottom: 6px;">🚨 ẢNH VI PHẠM (XÁC NHẬN 2S)</span>
+                       <img src="${escapeHtml(data.evidenceUrl)}" alt="Ảnh vi phạm" style="width: 100%; max-width: 270px; height: auto; border-radius: 6px; border: 1px solid #fca5a5;" />
+                     </td>
+                   </tr>
+                 </table>
+                 <p style="font-size: 12px; color: #64748b; margin-top: 5px; text-align: center;">Đối chứng bằng chứng vi phạm phục vụ thẩm định của Cán bộ an toàn</p>
                </div>`
-            : ""
+            : data.evidenceUrl
+              ? `<div style="text-align: center; margin: 25px 0;">
+                   <img src="${escapeHtml(data.evidenceUrl)}" alt="Hình ảnh bằng chứng" style="max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #cbd5e1;" />
+                   <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Hình ảnh bằng chứng trích xuất từ AI Vision</p>
+                 </div>`
+              : ""
         }
 
         <p style="font-size: 13px; color: #64748b; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px;">

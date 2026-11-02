@@ -67,6 +67,7 @@ export interface DispatchIncidentNotificationDto {
   severity: string;
   description?: string;
   evidenceUrl?: string;
+  referenceEvidenceUrl?: string;
   detectedAt?: Date | string;
   recipientUserIds?: string[];
   channels?: NotificationChannel[];

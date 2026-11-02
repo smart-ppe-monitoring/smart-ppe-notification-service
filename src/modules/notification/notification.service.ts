@@ -181,9 +181,12 @@ export class NotificationService {
     // SEC-21: Loại bỏ các ID trùng lặp để ngăn chặn Resource Flooding & Notification Bombing
     const recipientIds = Array.from(new Set(dto.recipientUserIds || []));
 
-    // SEC-31: Xác thực evidenceUrl chống tấn công SSRF & DNS Rebinding
+    // SEC-31: Xác thực evidenceUrl & referenceEvidenceUrl chống tấn công SSRF & DNS Rebinding
     if (dto.evidenceUrl) {
       await assertSafePublicUrl(dto.evidenceUrl);
+    }
+    if (dto.referenceEvidenceUrl) {
+      await assertSafePublicUrl(dto.referenceEvidenceUrl);
     }
 
     if (recipientIds.length === 0) {
@@ -326,6 +329,7 @@ export class NotificationService {
             title,
             content,
             evidenceUrl: dto.evidenceUrl,
+            referenceEvidenceUrl: dto.referenceEvidenceUrl,
             detectedAt: dto.detectedAt || new Date().toISOString(),
           },
         });
@@ -367,6 +371,7 @@ export class NotificationService {
             siteName: dto.siteName,
             detectedAt: dto.detectedAt,
             evidenceUrl: dto.evidenceUrl,
+            referenceEvidenceUrl: dto.referenceEvidenceUrl,
             description: dto.description,
           })
           .catch((err) => {

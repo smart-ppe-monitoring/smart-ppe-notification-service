@@ -65,6 +65,13 @@ export const dispatchIncidentNotificationSchema = z.object({
       "evidenceUrl phải là URL HTTP/HTTPS hợp lệ",
     )
     .optional(),
+  referenceEvidenceUrl: z
+    .string()
+    .refine(
+      (url) => !url || isPublicHttpUrl(url),
+      "referenceEvidenceUrl phải là URL HTTP/HTTPS hợp lệ",
+    )
+    .optional(),
   detectedAt: z.coerce.date().optional(),
   recipientUserIds: z
     .array(z.string().uuid("Mã người dùng không hợp lệ"))
