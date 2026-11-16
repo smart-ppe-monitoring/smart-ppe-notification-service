@@ -7,6 +7,8 @@ declare global {
         email: string;
         role: string;
         roleId?: string;
+        siteId?: string;
+        siteIds?: string[];
         permissions?: string[];
       };
       apiKey?: {

@@ -29,9 +29,15 @@ import { mailService, MailService } from "../../common/services/mail.service";
 import { sseManagerService, SseManagerService } from "../../common/services/sse-manager.service";
 import { EmailTemplateService } from "../../common/services/email-template.service";
 import { renderTemplateString } from "../../common/helpers/template.helper";
-import { assertSafePublicUrl } from "../../common/helpers/url.helper";
+import {
+  assertSafeEvidenceUrl,
+  assertSafePublicUrl,
+  isSafeInternalEvidencePath,
+  isTrustedMinioEvidenceUrl,
+} from "../../common/helpers/url.helper";
 import { isUuid } from "../../common/helpers/uuid.helper";
 import { GATEWAY_HEADERS } from "../../common/constants/gateway.constant";
+import { ROLES } from "../../common/constants/role.constant";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
@@ -54,19 +60,38 @@ export interface IncidentClient {
   getIncidentById(incidentId: string): Promise<any | null>;
 }
 
+export interface IdentityRecipient {
+  id: string;
+  email?: string | null;
+  fullName?: string | null;
+  role?: string | null;
+}
+
+export interface IdentityClient {
+  getIncidentRecipients(siteId?: string): Promise<IdentityRecipient[]>;
+}
+
+export function isAutomatedTestRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === "test" ||
+    Boolean(process.env.NODE_TEST_CONTEXT)
+  );
+}
+
+const IDENTITY_RECIPIENTS_CACHE_TTL_MS = 30_000;
+const identityRecipientsCache = new Map<
+  string,
+  { expiresAt: number; data: IdentityRecipient[] }
+>();
+
 export const defaultIncidentClient: IncidentClient = {
   async getIncidentById(incidentId: string): Promise<{ id: string } | null> {
     if (!incidentId || !isUuid(incidentId)) {
       return null;
     }
 
-    const isTest =
-      process.env.NODE_ENV === "test" ||
-      process.argv.some((a) => a.includes("test")) ||
-      Boolean(process.env.NODE_TEST_CONTEXT);
-
     const baseUrl = envConfig.incident.serviceUrl;
-    if (!baseUrl || isTest) {
+    if (!baseUrl || isAutomatedTestRuntime()) {
       return { id: incidentId };
     }
 
@@ -77,9 +102,13 @@ export const defaultIncidentClient: IncidentClient = {
       if (envConfig.gateway.internalSecret) {
         headers[GATEWAY_HEADERS.INTERNAL_SECRET] = envConfig.gateway.internalSecret;
       }
+      if (envConfig.internalService.token) {
+        headers[GATEWAY_HEADERS.INTERNAL_SERVICE_TOKEN] =
+          envConfig.internalService.token;
+      }
 
       const res = await fetch(
-        `${baseUrl}/api/v1/incidents/${encodeURIComponent(incidentId)}`,
+        `${baseUrl.replace(/\/+$/, "")}/api/v1/incidents/internal/${encodeURIComponent(incidentId)}`,
         {
           method: "GET",
           headers,
@@ -91,13 +120,84 @@ export const defaultIncidentClient: IncidentClient = {
         return null;
       }
       if (!res.ok) {
-        // Tránh gián đoạn hệ thống khi incident service gặp sự cố thoáng qua
-        return { id: incidentId };
+        throw new AppError(
+          `Không thể xác minh sự cố từ Incident Service (HTTP ${res.status})`,
+          503,
+          ERROR_CODE.SERVICE_UNAVAILABLE,
+        );
       }
       const data = (await res.json()) as any;
-      return data?.data || data || { id: incidentId };
+      return data?.data || data || null;
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      throw new AppError(
+        "Incident Service tạm thời không khả dụng để xác minh sự cố",
+        503,
+        ERROR_CODE.SERVICE_UNAVAILABLE,
+      );
+    }
+  },
+};
+
+export const defaultIdentityClient: IdentityClient = {
+  async getIncidentRecipients(siteId?: string): Promise<IdentityRecipient[]> {
+    const baseUrl = envConfig.identity.serviceUrl;
+    if (!baseUrl || !envConfig.internalService.token || isAutomatedTestRuntime()) {
+      return [];
+    }
+
+    const cacheKey = siteId || "__ALL__";
+    const cached = identityRecipientsCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        [GATEWAY_HEADERS.INTERNAL_SERVICE_TOKEN]:
+          envConfig.internalService.token,
+      };
+      if (envConfig.gateway.internalSecret) {
+        headers[GATEWAY_HEADERS.INTERNAL_SECRET] =
+          envConfig.gateway.internalSecret;
+      }
+
+      const query = siteId ? `?siteId=${encodeURIComponent(siteId)}` : "";
+      const res = await fetch(
+        `${baseUrl.replace(/\/+$/, "")}/api/v1/users/internal/incident-recipients${query}`,
+        {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(3000),
+        },
+      );
+
+      if (!res.ok) {
+        return cached?.data || [];
+      }
+
+      const body = (await res.json()) as any;
+      const rows = Array.isArray(body?.data) ? body.data : [];
+      const parsed: IdentityRecipient[] = rows
+        .filter((u: any) => u && typeof u.id === "string" && isUuid(u.id))
+        .map((u: any) => ({
+          id: u.id,
+          email: u.email || null,
+          fullName: u.fullName || null,
+          role: u.role || null,
+        }));
+
+      identityRecipientsCache.set(cacheKey, {
+        expiresAt: Date.now() + IDENTITY_RECIPIENTS_CACHE_TTL_MS,
+        data: parsed,
+      });
+
+      return parsed;
     } catch {
-      return { id: incidentId };
+      return cached?.data || [];
     }
   },
 };
@@ -108,6 +208,7 @@ export class NotificationService {
   private readonly sse: SseManagerService;
   private readonly emailTemplateService: EmailTemplateService;
   private readonly incidentClient: IncidentClient;
+  private readonly identityClient: IdentityClient;
 
   constructor(
     repository?: NotificationRepository,
@@ -115,6 +216,7 @@ export class NotificationService {
     sse?: SseManagerService,
     emailTemplateService?: EmailTemplateService,
     incidentClient?: IncidentClient,
+    identityClient?: IdentityClient,
   ) {
     this.repository = repository || notificationRepository;
     this.mail = mail || mailService;
@@ -122,6 +224,7 @@ export class NotificationService {
     this.emailTemplateService =
       emailTemplateService || new EmailTemplateService();
     this.incidentClient = incidentClient || defaultIncidentClient;
+    this.identityClient = identityClient || defaultIdentityClient;
   }
 
   // ─────────────────────────────────────────────
@@ -163,6 +266,12 @@ export class NotificationService {
    */
   async dispatchIncidentNotification(
     dto: DispatchIncidentNotificationDto,
+    actorContext?: {
+      id?: string;
+      role?: string;
+      siteId?: string | null;
+      siteIds?: string[];
+    },
   ): Promise<DispatchIncidentNotificationResultDto> {
     const severity = (dto.severity || NOTIFICATION_SEVERITY.NORMAL).toUpperCase() as NotificationSeverity;
     const severityWeight = SEVERITY_WEIGHT[severity] || 2;
@@ -177,16 +286,91 @@ export class NotificationService {
       );
     }
 
-    // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
+    if (incident.siteId && dto.siteId && incident.siteId !== dto.siteId) {
+      throw new AppError(
+        "siteId không khớp với công trường của sự cố đã đăng ký",
+        422,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+
+    const effectiveSiteId: string | undefined = incident.siteId || dto.siteId;
+
+    // User-facing route (/trigger-incident): bắt buộc xác thực phạm vi site & chặn ghi đè danh sách nhận / ảnh ngoài
+    if (actorContext) {
+      if (!incident.siteId) {
+        throw new AppError(
+          "Không xác định được công trường của sự cố để phát cảnh báo",
+          403,
+          ERROR_CODE.FORBIDDEN,
+        );
+      }
+
+      if (actorContext.role !== ROLES.ADMIN) {
+        const allowedSites = new Set<string>([
+          ...(actorContext.siteId ? [actorContext.siteId] : []),
+          ...(Array.isArray(actorContext.siteIds) ? actorContext.siteIds : []),
+        ]);
+        if (!allowedSites.has(incident.siteId)) {
+          throw new AppError(
+            "Bạn không có quyền phát cảnh báo cho sự cố thuộc công trường này",
+            403,
+            ERROR_CODE.FORBIDDEN,
+          );
+        }
+      }
+
+      const isTrustedUserEvidence = (url?: string): boolean => {
+        if (!url) return true;
+        return (
+          isSafeInternalEvidencePath(url) ||
+          isTrustedMinioEvidenceUrl(
+            url,
+            envConfig.minio.endpoint,
+            envConfig.minio.bucketEvidences,
+          )
+        );
+      };
+      if (
+        !isTrustedUserEvidence(dto.evidenceUrl) ||
+        !isTrustedUserEvidence(dto.referenceEvidenceUrl)
+      ) {
+        throw new AppError(
+          "URL bằng chứng không thuộc đường dẫn nội bộ hoặc MinIO đáng tin cậy",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
+      }
+    }
+
+    // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers / Admins)
+    // Nếu không truyền tường minh `recipientUserIds` (undefined), tự động tra cứu từ Identity Service theo `effectiveSiteId`.
+    let resolvedUsers: IdentityRecipient[] = [];
+    let rawRecipientIds = dto.recipientUserIds;
+    if (rawRecipientIds === undefined || actorContext) {
+      resolvedUsers = await this.identityClient.getIncidentRecipients(effectiveSiteId);
+      if (rawRecipientIds === undefined) {
+        rawRecipientIds = resolvedUsers.map((u) => u.id);
+      } else if (actorContext && actorContext.role !== ROLES.ADMIN) {
+        // Non-admin không được ép gửi thông báo tới user không có thẩm quyền ở công trường này
+        const allowedRecipientSet = new Set(resolvedUsers.map((u) => u.id));
+        rawRecipientIds = rawRecipientIds.filter((uid) => allowedRecipientSet.has(uid));
+      }
+    }
+
     // SEC-21: Loại bỏ các ID trùng lặp để ngăn chặn Resource Flooding & Notification Bombing
-    const recipientIds = Array.from(new Set(dto.recipientUserIds || []));
+    const recipientIds = Array.from(new Set(rawRecipientIds || []));
 
     // SEC-31: Xác thực evidenceUrl & referenceEvidenceUrl chống tấn công SSRF & DNS Rebinding
+    const safeEvidenceOptions = {
+      minioEndpoint: envConfig.minio.endpoint,
+      bucketName: envConfig.minio.bucketEvidences,
+    };
     if (dto.evidenceUrl) {
-      await assertSafePublicUrl(dto.evidenceUrl);
+      await assertSafeEvidenceUrl(dto.evidenceUrl, safeEvidenceOptions);
     }
     if (dto.referenceEvidenceUrl) {
-      await assertSafePublicUrl(dto.referenceEvidenceUrl);
+      await assertSafeEvidenceUrl(dto.referenceEvidenceUrl, safeEvidenceOptions);
     }
 
     if (recipientIds.length === 0) {
@@ -198,9 +382,13 @@ export class NotificationService {
       };
     }
 
-    // 2. SEC-06: Tra cứu thông tin người dùng nhận tin để lấy email thực nếu được cung cấp
+    // 2. SEC-06: Tra cứu thông tin người dùng nhận tin để lấy email thực từ Identity Service
+    // Trên user-facing route (actorContext != undefined), bỏ qua email tự khai báo từ client để chống spoofing.
     const emailMap = new Map<string, string>();
-    if (dto.recipientEmails && typeof dto.recipientEmails === "object") {
+    resolvedUsers.forEach((u) => {
+      if (u.id && u.email) emailMap.set(u.id, u.email);
+    });
+    if (!actorContext && dto.recipientEmails && typeof dto.recipientEmails === "object") {
       if (Array.isArray(dto.recipientEmails)) {
         dto.recipientEmails.forEach((email, idx) => {
           if (recipientIds[idx]) emailMap.set(recipientIds[idx], email);
@@ -211,7 +399,7 @@ export class NotificationService {
         });
       }
     }
-    if (Array.isArray(dto.recipientUsers)) {
+    if (!actorContext && Array.isArray(dto.recipientUsers)) {
       dto.recipientUsers.forEach((u) => {
         if (u.id && u.email) emailMap.set(u.id, u.email);
       });

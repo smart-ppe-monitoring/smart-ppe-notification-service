@@ -180,6 +180,10 @@ export async function authMiddleware(
       email: payload.email,
       role: payload.role,
       roleId: payload.roleId,
+      siteId: typeof payload.siteId === "string" ? payload.siteId : undefined,
+      siteIds: Array.isArray(payload.siteIds)
+        ? payload.siteIds.filter((s: unknown): s is string => typeof s === "string")
+        : undefined,
       permissions: Array.isArray(payload.permissions)
         ? payload.permissions
         : undefined,

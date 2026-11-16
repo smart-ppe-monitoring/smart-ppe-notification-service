@@ -55,7 +55,7 @@ export class NotificationController {
   // PPE Incident Notification Dispatch (BE-08)
   // ─────────────────────────────────────────────
 
-  dispatchIncidentNotification = async (
+  dispatchInternalIncidentNotification = async (
     req: Request,
     res: Response,
     next: NextFunction,
@@ -63,6 +63,24 @@ export class NotificationController {
     try {
       const dto = req.body as DispatchIncidentNotificationDto;
       const result = await this.service.dispatchIncidentNotification(dto);
+      res.status(201).json({
+        success: true,
+        message: "Phát cảnh báo sự cố vi phạm PPE thành công",
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  dispatchIncidentNotification = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const dto = req.body as DispatchIncidentNotificationDto;
+      const result = await this.service.dispatchIncidentNotification(dto, req.user);
       res.status(201).json({
         success: true,
         message: "Phát cảnh báo sự cố vi phạm PPE thành công",

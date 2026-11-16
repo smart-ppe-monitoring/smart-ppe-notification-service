@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { NotificationController, notificationController } from "./notification.controller";
 import { authMiddleware } from "../../middlewares/auth.middleware";
+import { requireInternalServiceToken } from "../../middlewares/internal-auth.middleware";
 import { authRateLimitMiddleware } from "../../middlewares/rate-limit.middleware";
 import { requirePermission, requireAnyPermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
@@ -25,6 +26,14 @@ import { PERMISSIONS } from "../../common/constants/permission.constant";
 
 const router = Router();
 const controller = notificationController;
+
+// Internal M2M trigger endpoint for Incident Service (no User JWT required, fail-closed M2M token)
+router.post(
+  "/internal/trigger-incident",
+  requireInternalServiceToken,
+  validate(dispatchIncidentNotificationSchema),
+  controller.dispatchInternalIncidentNotification,
+);
 
 router.use(authMiddleware);
 

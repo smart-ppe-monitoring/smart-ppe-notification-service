@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { isPublicHttpUrl } from "../../common/helpers/url.helper";
+import {
+  isPublicHttpUrl,
+  isSafeEvidenceUrl,
+} from "../../common/helpers/url.helper";
+import { envConfig } from "../../config/env.config";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
@@ -61,15 +65,25 @@ export const dispatchIncidentNotificationSchema = z.object({
   evidenceUrl: z
     .string()
     .refine(
-      (url) => !url || isPublicHttpUrl(url),
-      "evidenceUrl phải là URL HTTP/HTTPS hợp lệ",
+      (url) =>
+        !url ||
+        isSafeEvidenceUrl(url, {
+          minioEndpoint: envConfig.minio.endpoint,
+          bucketName: envConfig.minio.bucketEvidences,
+        }),
+      "evidenceUrl phải là đường dẫn bằng chứng nội bộ hoặc URL HTTP/HTTPS hợp lệ",
     )
     .optional(),
   referenceEvidenceUrl: z
     .string()
     .refine(
-      (url) => !url || isPublicHttpUrl(url),
-      "referenceEvidenceUrl phải là URL HTTP/HTTPS hợp lệ",
+      (url) =>
+        !url ||
+        isSafeEvidenceUrl(url, {
+          minioEndpoint: envConfig.minio.endpoint,
+          bucketName: envConfig.minio.bucketEvidences,
+        }),
+      "referenceEvidenceUrl phải là đường dẫn bằng chứng nội bộ hoặc URL HTTP/HTTPS hợp lệ",
     )
     .optional(),
   detectedAt: z.coerce.date().optional(),

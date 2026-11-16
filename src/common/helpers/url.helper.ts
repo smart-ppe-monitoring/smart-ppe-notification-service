@@ -133,6 +133,72 @@ export interface IsPublicHttpUrlOptions {
   allowPrivate?: boolean;
 }
 
+export interface SafeEvidenceUrlOptions extends SafeRedirectOptions {
+  /** Endpoint MinIO nội bộ được cấu hình (vd: http://ppe-minio:9000 hoặc http://localhost:9000). */
+  minioEndpoint?: string;
+  /** Bucket chứa ảnh bằng chứng được phép truy cập (mặc định ppe-evidences). */
+  bucketName?: string;
+}
+
+const INTERNAL_EVIDENCE_DOWNLOAD_PATH_REGEX =
+  /^\/api\/v1\/(?:incidents\/evidences|evidences)\/[A-Za-z0-9_-]{8,128}\/download$/;
+
+/**
+ * Kiểm tra đường dẫn tương đối tới API tải bằng chứng nội bộ của chính Gateway/Incident Service.
+ * Không chứa host, query string hay path traversal (`..`, `//`) nên hoàn toàn miễn nhiễm SSRF.
+ */
+export function isSafeInternalEvidencePath(urlString: string): boolean {
+  if (!urlString || typeof urlString !== "string") return false;
+  const trimmed = urlString.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return false;
+  if (trimmed.includes("..") || trimmed.includes("\\")) return false;
+  return INTERNAL_EVIDENCE_DOWNLOAD_PATH_REGEX.test(trimmed);
+}
+
+/**
+ * Kiểm tra URL trỏ chính xác về MinIO endpoint & bucket chứa ảnh bằng chứng đã cấu hình.
+ */
+export function isTrustedMinioEvidenceUrl(
+  urlString: string,
+  minioEndpoint?: string,
+  bucketName?: string,
+): boolean {
+  if (!urlString || !minioEndpoint || !bucketName) return false;
+  try {
+    const target = new URL(urlString);
+    const trustedBase = new URL(minioEndpoint);
+    if (!["http:", "https:"].includes(target.protocol)) return false;
+    if (target.origin !== trustedBase.origin) return false;
+    const cleanBucket = bucketName.replace(/^\/+|\/+$/g, "");
+    if (!cleanBucket) return false;
+    if (target.pathname.includes("..")) return false;
+    return target.pathname.startsWith(`/${cleanBucket}/`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kiểm tra hợp lệ URL bằng chứng PPE (tương đối nội bộ, MinIO đã cấu hình hoặc Public HTTP/HTTPS URL).
+ */
+export function isSafeEvidenceUrl(
+  urlString: string,
+  options: SafeEvidenceUrlOptions = {},
+): boolean {
+  if (!urlString || typeof urlString !== "string") return false;
+  if (isSafeInternalEvidencePath(urlString)) return true;
+  if (
+    isTrustedMinioEvidenceUrl(
+      urlString,
+      options.minioEndpoint,
+      options.bucketName,
+    )
+  ) {
+    return true;
+  }
+  return isPublicHttpUrl(urlString, options);
+}
+
 /**
  * Kiểm tra URL có phải là public HTTP/HTTPS URL hợp lệ (Static Syntax Check).
  */
@@ -513,5 +579,32 @@ export async function assertSafePublicUrl(
       );
     }
   }
+}
+
+/**
+ * SEC-31 (PPE Evidence Extension):
+ * Cho phép đường dẫn tải ảnh nội bộ (`/api/v1/incidents/evidences/:id/download`) và URL MinIO đã whitelist,
+ * đồng thời giữ nguyên toàn bộ hàng rào SSRF & DNS Rebinding với mọi URL ngoài phạm vi tin cậy.
+ */
+export async function assertSafeEvidenceUrl(
+  urlStr: string,
+  options: SafeEvidenceUrlOptions = {},
+): Promise<void> {
+  if (!urlStr || typeof urlStr !== "string") {
+    throw new AppError("URL không hợp lệ hoặc bị trống", 400, ERROR_CODE.VALIDATION_ERROR);
+  }
+  if (isSafeInternalEvidencePath(urlStr)) {
+    return;
+  }
+  if (
+    isTrustedMinioEvidenceUrl(
+      urlStr,
+      options.minioEndpoint,
+      options.bucketName,
+    )
+  ) {
+    return;
+  }
+  await assertSafePublicUrl(urlStr, options);
 }
 
