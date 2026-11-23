@@ -22,6 +22,15 @@ import { NotificationRepository } from "../src/modules/notification/notification
 import { MailService } from "../src/common/services/mail.service";
 import { SseManagerService } from "../src/common/services/sse-manager.service";
 import { EmailTemplateService } from "../src/common/services/email-template.service";
+import { SystemConfigCacheService } from "../src/common/services/system-config-cache.service";
+import { EmailWorker } from "../src/common/workers/email-worker";
+import { NotificationSubscriber } from "../src/common/subscribers/notification.subscriber";
+import { EventBusService } from "../src/common/services/event-bus.service";
+import { EVENT_NAMES } from "../src/common/constants/event.constant";
+import {
+  FEATURE_FLAGS,
+  SYSTEM_CONFIG_PUBSUB_CHANNEL,
+} from "../src/common/constants/system-config.constant";
 import notificationRoute from "../src/modules/notification/notification.route";
 import { authMiddleware } from "../src/middlewares/auth.middleware";
 import { AppError } from "../src/common/errors/app-error";
@@ -477,6 +486,313 @@ describe("Internal Incident Notification Trigger & Evidence SSRF Guard", () => {
       } finally {
         jwtConfig.publicKey = origPublicKey;
       }
+    });
+  });
+
+  describe("Feature Flag feature.notifications.enabled & SystemConfigCacheService", () => {
+    const incidentId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a6b";
+    const siteId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a6c";
+    const officerId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a61";
+
+    it("SystemConfigCacheService fetches /system/public, caches result, and hot-toggles via Redis PubSub message", async () => {
+      let fetchCalls = 0;
+      let remoteEnabled = true;
+      const cache = new SystemConfigCacheService(async () => {
+        fetchCalls += 1;
+        return {
+          [FEATURE_FLAGS.NOTIFICATIONS_ENABLED]: remoteEnabled,
+        };
+      });
+
+      assert.strictEqual(
+        await cache.isFeatureEnabled(FEATURE_FLAGS.NOTIFICATIONS_ENABLED, true),
+        true,
+      );
+      assert.strictEqual(fetchCalls, 1);
+
+      // Subsequent read within TTL uses cache
+      assert.strictEqual(
+        await cache.isFeatureEnabled(FEATURE_FLAGS.NOTIFICATIONS_ENABLED, true),
+        true,
+      );
+      assert.strictEqual(fetchCalls, 1);
+
+      // Hot-toggle via Redis PubSub message with value
+      cache.handlePubSubMessage(
+        SYSTEM_CONFIG_PUBSUB_CHANNEL,
+        JSON.stringify({
+          key: FEATURE_FLAGS.NOTIFICATIONS_ENABLED,
+          value: false,
+        }),
+      );
+      assert.strictEqual(
+        await cache.isFeatureEnabled(FEATURE_FLAGS.NOTIFICATIONS_ENABLED, true),
+        false,
+      );
+      assert.strictEqual(fetchCalls, 1);
+
+      // Invalidation without value forces re-fetch
+      remoteEnabled = true;
+      cache.handlePubSubMessage(
+        SYSTEM_CONFIG_PUBSUB_CHANNEL,
+        JSON.stringify({ key: FEATURE_FLAGS.NOTIFICATIONS_ENABLED }),
+      );
+      assert.strictEqual(
+        await cache.isFeatureEnabled(FEATURE_FLAGS.NOTIFICATIONS_ENABLED, true),
+        true,
+      );
+      assert.strictEqual(fetchCalls, 2);
+
+      await cache.close();
+    });
+
+    it("SystemConfigCacheService clears expired entry and returns defaultValue when /system/public omits the key", async () => {
+      let remoteConfigs: Record<string, unknown> = {
+        [FEATURE_FLAGS.NOTIFICATIONS_ENABLED]: false,
+      };
+      let fetchCalls = 0;
+
+      const cache = new SystemConfigCacheService(async () => {
+        fetchCalls += 1;
+        return remoteConfigs;
+      });
+
+      // 1. Initial fetch caches false
+      assert.strictEqual(
+        await cache.isFeatureEnabled(FEATURE_FLAGS.NOTIFICATIONS_ENABLED, true),
+        false,
+      );
+      assert.strictEqual(fetchCalls, 1);
+
+      // 2. Expire cached entry and remove key from upstream /system/public
+      const internalCache = (cache as unknown as {
+        cache: Map<string, { value: unknown; expiresAt: number }>;
+      }).cache;
+      const entry = internalCache.get(FEATURE_FLAGS.NOTIFICATIONS_ENABLED);
+      assert.ok(entry);
+      entry.expiresAt = Date.now() - 1000;
+      remoteConfigs = {};
+
+      // 3. Subsequent read must NOT return stale expired false; must evict and return defaultValue (true)
+      assert.strictEqual(
+        await cache.isFeatureEnabled(FEATURE_FLAGS.NOTIFICATIONS_ENABLED, true),
+        true,
+      );
+      assert.strictEqual(fetchCalls, 2);
+      assert.strictEqual(
+        internalCache.has(FEATURE_FLAGS.NOTIFICATIONS_ENABLED),
+        false,
+      );
+
+      await cache.close();
+    });
+
+    it("dispatchIncidentNotification returns 0 and sends no SSE/Email when feature.notifications.enabled is false", async () => {
+      let sseCalled = false;
+      let emailCalled = false;
+      let persisted = false;
+      let incidentLookedUp = false;
+
+      const service = new NotificationService(
+        {
+          createManyNotifications: async () => {
+            persisted = true;
+            return { count: 1 };
+          },
+        } as unknown as NotificationRepository,
+        {
+          sendPpeViolationAlertEmail: async () => {
+            emailCalled = true;
+          },
+        } as unknown as MailService,
+        {
+          sendToUser: () => {
+            sseCalled = true;
+          },
+        } as unknown as SseManagerService,
+        new EmailTemplateService(),
+        {
+          getIncidentById: async () => {
+            incidentLookedUp = true;
+            return { id: incidentId, siteId };
+          },
+        },
+        {
+          getIncidentRecipients: async () => [
+            { id: officerId, email: "officer@ppe.local", role: ROLES.SAFETY_OFFICER },
+          ],
+        },
+        { isFeatureEnabled: async () => false },
+      );
+
+      // M2M /internal/trigger-incident
+      const m2mRes = await service.dispatchIncidentNotification({
+        incidentId,
+        siteId,
+        violationType: "NO_HELMET",
+        severity: NOTIFICATION_SEVERITY.HIGH,
+      });
+      assert.strictEqual(m2mRes.dispatchedCount, 0);
+      assert.deepStrictEqual(m2mRes.channels, []);
+
+      // User-facing /trigger-incident
+      const userRes = await service.dispatchIncidentNotification(
+        {
+          incidentId,
+          siteId,
+          violationType: "NO_HELMET",
+          severity: NOTIFICATION_SEVERITY.HIGH,
+        },
+        { id: officerId, role: ROLES.SAFETY_OFFICER, siteId, siteIds: [siteId] },
+      );
+      assert.strictEqual(userRes.dispatchedCount, 0);
+      assert.strictEqual(sseCalled, false);
+      assert.strictEqual(emailCalled, false);
+      assert.strictEqual(persisted, false);
+      assert.strictEqual(incidentLookedUp, false);
+    });
+
+    it("send, broadcast, and testSendTemplate reject with 403 FEATURE_DISABLED when feature.notifications.enabled is false", async () => {
+      const service = new NotificationService(
+        {} as NotificationRepository,
+        {} as MailService,
+        {} as SseManagerService,
+        new EmailTemplateService(),
+        undefined,
+        undefined,
+        { isFeatureEnabled: async () => false },
+      );
+
+      await assert.rejects(
+        () =>
+          service.send({
+            userIds: [officerId],
+            channels: [NOTIFICATION_CHANNEL.IN_APP],
+            title: "Test",
+            content: "Test",
+          }),
+        (err: any) =>
+          err instanceof AppError &&
+          err.statusCode === 403 &&
+          err.code === ERROR_CODE.FEATURE_DISABLED,
+      );
+
+      await assert.rejects(
+        () =>
+          service.broadcast({
+            title: "Broadcast",
+            content: "Emergency",
+          }),
+        (err: any) =>
+          err instanceof AppError &&
+          err.statusCode === 403 &&
+          err.code === ERROR_CODE.FEATURE_DISABLED,
+      );
+
+      await assert.rejects(
+        () =>
+          service.testSendTemplate("PPE_VIOLATION_ALERT", officerId, {
+            variables: {},
+          }),
+        (err: any) =>
+          err instanceof AppError &&
+          err.statusCode === 403 &&
+          err.code === ERROR_CODE.FEATURE_DISABLED,
+      );
+    });
+
+    it("EmailWorker.process() skips claiming emails when feature.notifications.enabled is false", async () => {
+      let claimed = false;
+      const worker = new EmailWorker(
+        { isFeatureEnabled: async () => false },
+        {
+          claimPendingEmails: async () => {
+            claimed = true;
+            return [];
+          },
+        } as unknown as NotificationRepository,
+      );
+
+      await worker.process();
+      assert.strictEqual(claimed, false);
+    });
+
+    it("NotificationSubscriber enforces feature.notifications.enabled and user EMAIL preference on AUTH_NEW_DEVICE_DETECTED only", async () => {
+      let newDeviceSent = 0;
+      let verifySent = 0;
+      const mockMail = {
+        sendNewDeviceAlertEmail: async () => {
+          newDeviceSent += 1;
+        },
+        sendVerificationEmail: async () => {
+          verifySent += 1;
+        },
+      } as unknown as MailService;
+
+      // 1. Global flag disabled -> skips AUTH_NEW_DEVICE_DETECTED, still sends verification email
+      const bus1 = new EventBusService();
+      const sub1 = new NotificationSubscriber(
+        mockMail,
+        bus1,
+        { isFeatureEnabled: async () => false },
+        { findUserPreferenceForChannel: async () => ({ enabled: true }) } as any,
+      );
+      sub1.register();
+      await bus1.dispatchDirectly({
+        id: "evt-nd-1",
+        name: EVENT_NAMES.AUTH_NEW_DEVICE_DETECTED,
+        payload: { userId: officerId, email: "officer@ppe.local", deviceName: "Edge", ip: "1.2.3.4" },
+        timestamp: Date.now(),
+        source: "identity",
+      });
+      await bus1.dispatchDirectly({
+        id: "evt-ver-1",
+        name: EVENT_NAMES.AUTH_USER_REGISTERED,
+        payload: { userId: officerId, email: "officer@ppe.local", verifyToken: "tok" },
+        timestamp: Date.now(),
+        source: "identity",
+      });
+      assert.strictEqual(newDeviceSent, 0);
+      assert.strictEqual(verifySent, 1);
+      await bus1.close();
+
+      // 2. Global flag enabled, user EMAIL preference disabled -> skips AUTH_NEW_DEVICE_DETECTED
+      const bus2 = new EventBusService();
+      const sub2 = new NotificationSubscriber(
+        mockMail,
+        bus2,
+        { isFeatureEnabled: async () => true },
+        { findUserPreferenceForChannel: async () => ({ enabled: false }) } as any,
+      );
+      sub2.register();
+      await bus2.dispatchDirectly({
+        id: "evt-nd-2",
+        name: EVENT_NAMES.AUTH_NEW_DEVICE_DETECTED,
+        payload: { userId: officerId, email: "officer@ppe.local", deviceName: "Edge", ip: "1.2.3.4" },
+        timestamp: Date.now(),
+        source: "identity",
+      });
+      assert.strictEqual(newDeviceSent, 0);
+      await bus2.close();
+
+      // 3. Both enabled -> sends AUTH_NEW_DEVICE_DETECTED
+      const bus3 = new EventBusService();
+      const sub3 = new NotificationSubscriber(
+        mockMail,
+        bus3,
+        { isFeatureEnabled: async () => true },
+        { findUserPreferenceForChannel: async () => ({ enabled: true }) } as any,
+      );
+      sub3.register();
+      await bus3.dispatchDirectly({
+        id: "evt-nd-3",
+        name: EVENT_NAMES.AUTH_NEW_DEVICE_DETECTED,
+        payload: { userId: officerId, email: "officer@ppe.local", deviceName: "Edge", ip: "1.2.3.4" },
+        timestamp: Date.now(),
+        source: "identity",
+      });
+      assert.strictEqual(newDeviceSent, 1);
+      await bus3.close();
     });
   });
 });

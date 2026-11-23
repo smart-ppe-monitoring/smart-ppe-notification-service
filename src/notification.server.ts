@@ -16,6 +16,7 @@ import { EVENT_BUS_CONSTANTS } from "./common/constants/event.constant";
 import { notificationSubscriber } from "./common/subscribers/notification.subscriber";
 import { eventBus } from "./common/services/event-bus.service";
 import { sseManagerService } from "./common/services/sse-manager.service";
+import { systemConfigCacheService } from "./common/services/system-config-cache.service";
 import { notificationPrisma } from "./database/notification.client";
 
 const PORT = envConfig.notification.port;
@@ -100,8 +101,9 @@ export async function handleNotificationShutdown(
       "[Notification Service] EmailWorker & NotificationEventBusWorker stopped.",
     );
 
-    // 4. Close SSE connections & EventBus
+    // 4. Close SSE connections, SystemConfigCache & EventBus
     await sseManagerService.close();
+    await systemConfigCacheService.close();
     await eventBus.close();
     console.log("[Notification Service] SSE and EventBus connections closed.");
 

@@ -60,7 +60,7 @@ export const DEFAULT_SYSTEM_CONFIGS = [
     value: true,
     description: "Bật hệ thống gửi thông báo và email tự động",
     category: SYSTEM_CONFIG_CATEGORY.FEATURE_FLAG,
-    isPublic: false,
+    isPublic: true,
   },
   {
     key: FEATURE_FLAGS.WEBHOOKS_ENABLED,

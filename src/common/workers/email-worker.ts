@@ -5,7 +5,12 @@ import {
   EMAIL_STATUS,
   EMAIL_MAX_ATTEMPTS,
 } from "../constants/notification.constant";
+import { FEATURE_FLAGS } from "../constants/system-config.constant";
 import { maintenanceCacheService } from "../services/maintenance-cache.service";
+import {
+  systemConfigCacheService,
+  SystemConfigCacheService,
+} from "../services/system-config-cache.service";
 import { MAINTENANCE_STATUS } from "../constants/maintenance.constant";
 import {
   notificationRepository,
@@ -15,11 +20,19 @@ import {
 const BATCH_SIZE = 20;
 
 export class EmailWorker {
-  private readonly mailService = new MailService();
-  private readonly templateService = new EmailTemplateService();
   private intervalId?: ReturnType<typeof setInterval>;
   private isRunning = false;
   private activeBatchPromise?: Promise<void>;
+
+  constructor(
+    private readonly configService: Pick<
+      SystemConfigCacheService,
+      "isFeatureEnabled"
+    > = systemConfigCacheService,
+    private readonly repo: typeof notificationRepository = notificationRepository,
+    private readonly mailService: MailService = new MailService(),
+    private readonly templateService: EmailTemplateService = new EmailTemplateService(),
+  ) {}
 
   start(): void {
     if (!envConfig.notification.workerEnabled) {
@@ -49,7 +62,7 @@ export class EmailWorker {
     console.log("[EmailWorker] Stopped cleanly");
   }
 
-  private async process(): Promise<void> {
+  async process(): Promise<void> {
     if (this.isRunning) return; // Tránh chạy đồng thời nếu job trước chưa xong
     this.isRunning = true;
 
@@ -64,9 +77,16 @@ export class EmailWorker {
           return;
         }
 
+        const notificationsEnabled = await this.configService.isFeatureEnabled(
+          FEATURE_FLAGS.NOTIFICATIONS_ENABLED,
+          true,
+        );
+        if (!notificationsEnabled) {
+          return;
+        }
+
         // Atomic claim via PostgreSQL FOR UPDATE SKIP LOCKED
-        const pending =
-          await notificationRepository.claimPendingEmails(BATCH_SIZE);
+        const pending = await this.repo.claimPendingEmails(BATCH_SIZE);
 
         if (!pending || pending.length === 0) {
           return;
@@ -104,7 +124,7 @@ export class EmailWorker {
         html,
       );
 
-      await notificationRepository.updateEmailStatus(record.id, {
+      await this.repo.updateEmailStatus(record.id, {
         status: EMAIL_STATUS.SENT,
         sentAt: new Date(),
         attempts: record.attempts + 1,
@@ -121,7 +141,7 @@ export class EmailWorker {
           ? EMAIL_STATUS.FAILED
           : EMAIL_STATUS.PENDING;
 
-      await notificationRepository
+      await this.repo
         .updateEmailStatus(record.id, {
           status: newStatus,
           attempts: newAttempts,

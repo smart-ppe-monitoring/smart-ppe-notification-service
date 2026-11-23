@@ -28,6 +28,11 @@ import { NotificationRepository, notificationRepository } from "./notification.r
 import { mailService, MailService } from "../../common/services/mail.service";
 import { sseManagerService, SseManagerService } from "../../common/services/sse-manager.service";
 import { EmailTemplateService } from "../../common/services/email-template.service";
+import {
+  systemConfigCacheService,
+  SystemConfigCacheService,
+} from "../../common/services/system-config-cache.service";
+import { FEATURE_FLAGS } from "../../common/constants/system-config.constant";
 import { renderTemplateString } from "../../common/helpers/template.helper";
 import {
   assertSafeEvidenceUrl,
@@ -209,6 +214,10 @@ export class NotificationService {
   private readonly emailTemplateService: EmailTemplateService;
   private readonly incidentClient: IncidentClient;
   private readonly identityClient: IdentityClient;
+  private readonly systemConfigCache: Pick<
+    SystemConfigCacheService,
+    "isFeatureEnabled"
+  >;
 
   constructor(
     repository?: NotificationRepository,
@@ -217,6 +226,7 @@ export class NotificationService {
     emailTemplateService?: EmailTemplateService,
     incidentClient?: IncidentClient,
     identityClient?: IdentityClient,
+    systemConfigCache?: Pick<SystemConfigCacheService, "isFeatureEnabled">,
   ) {
     this.repository = repository || notificationRepository;
     this.mail = mail || mailService;
@@ -225,6 +235,25 @@ export class NotificationService {
       emailTemplateService || new EmailTemplateService();
     this.incidentClient = incidentClient || defaultIncidentClient;
     this.identityClient = identityClient || defaultIdentityClient;
+    this.systemConfigCache = systemConfigCache || systemConfigCacheService;
+  }
+
+  private async isNotificationsEnabled(): Promise<boolean> {
+    return this.systemConfigCache.isFeatureEnabled(
+      FEATURE_FLAGS.NOTIFICATIONS_ENABLED,
+      true,
+    );
+  }
+
+  private async assertNotificationsEnabled(): Promise<void> {
+    const enabled = await this.isNotificationsEnabled();
+    if (!enabled) {
+      throw new AppError(
+        "Hệ thống gửi thông báo và email tự động đang tạm tắt bởi Quản trị viên",
+        403,
+        ERROR_CODE.FEATURE_DISABLED,
+      );
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -273,6 +302,15 @@ export class NotificationService {
       siteIds?: string[];
     },
   ): Promise<DispatchIncidentNotificationResultDto> {
+    if (!(await this.isNotificationsEnabled())) {
+      return {
+        incidentId: dto.incidentId,
+        dispatchedCount: 0,
+        channels: [],
+        notifications: [],
+      };
+    }
+
     const severity = (dto.severity || NOTIFICATION_SEVERITY.NORMAL).toUpperCase() as NotificationSeverity;
     const severityWeight = SEVERITY_WEIGHT[severity] || 2;
 
@@ -683,6 +721,8 @@ export class NotificationService {
   // ─────────────────────────────────────────────
 
   async send(dto: SendNotificationDto): Promise<{ sentCount: number }> {
+    await this.assertNotificationsEnabled();
+
     const {
       userIds,
       channels,
@@ -797,6 +837,8 @@ export class NotificationService {
   async broadcast(
     dto: BroadcastNotificationDto,
   ): Promise<{ totalRecipients: number }> {
+    await this.assertNotificationsEnabled();
+
     const safeTitle = (dto.title || "").length > 255 ? dto.title.slice(0, 252) + "..." : dto.title;
 
     // SEC-31: Xác thực actionUrl chống tấn công SSRF & DNS Rebinding
@@ -999,6 +1041,8 @@ export class NotificationService {
     userId: string,
     dto: TestSendNotificationTemplateDto,
   ): Promise<{ message: string }> {
+    await this.assertNotificationsEnabled();
+
     const template = await this.getTemplateByCode(code);
     const content = renderTemplateString(template.contentTemplate, dto.variables);
     const subject = template.subjectTemplate
