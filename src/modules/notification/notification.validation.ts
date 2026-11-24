@@ -97,6 +97,28 @@ export const dispatchIncidentNotificationSchema = z.object({
   recipientUsers: z.array(z.object({ id: z.string().uuid(), email: z.string().email().optional() })).optional(),
 });
 
+export const dispatchIncidentCommentNotificationSchema = z.object({
+  incidentId: z.string().uuid("Mã sự cố incidentId không hợp lệ"),
+  commentId: z.string().uuid("Mã bình luận commentId không hợp lệ").optional(),
+  siteId: z.string().uuid("Mã công trường siteId không hợp lệ").optional(),
+  cameraId: z.string().uuid("Mã camera cameraId không hợp lệ").optional(),
+  cameraCode: z.string().max(100).optional(),
+  siteName: z.string().max(200).optional(),
+  violationType: z.string().max(100).optional(),
+  authorId: z.string().uuid("Mã tác giả authorId không hợp lệ"),
+  authorName: z.string().max(150).optional(),
+  authorEmail: z.string().email("Email tác giả không hợp lệ").optional(),
+  authorRole: z.string().max(50).optional(),
+  comment: z.string().trim().min(1, "Nội dung bình luận không được để trống").max(2000),
+  assignedUserIds: z
+    .array(z.string().uuid("Mã người được phân công không hợp lệ"))
+    .optional(),
+  participantUserIds: z
+    .array(z.string().uuid("Mã người tham gia không hợp lệ"))
+    .optional(),
+  createdAt: z.union([z.string(), z.coerce.date()]).optional(),
+});
+
 // ─────────────────────────────────────────────
 // User Notification Preference Validation
 // ─────────────────────────────────────────────

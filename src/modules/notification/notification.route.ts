@@ -9,6 +9,7 @@ import {
   listNotificationsSchema,
   notificationIdParamSchema,
   dispatchIncidentNotificationSchema,
+  dispatchIncidentCommentNotificationSchema,
   updateNotificationPreferenceSchema,
   sendNotificationSchema,
   broadcastNotificationSchema,
@@ -33,6 +34,13 @@ router.post(
   requireInternalServiceToken,
   validate(dispatchIncidentNotificationSchema),
   controller.dispatchInternalIncidentNotification,
+);
+
+router.post(
+  "/internal/trigger-incident-comment",
+  requireInternalServiceToken,
+  validate(dispatchIncidentCommentNotificationSchema),
+  controller.dispatchInternalIncidentCommentNotification,
 );
 
 router.use(authMiddleware);

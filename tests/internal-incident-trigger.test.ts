@@ -65,10 +65,13 @@ describe("Internal Incident Notification Trigger & Evidence SSRF Guard", () => {
     it("must mount POST /internal/trigger-incident BEFORE router.use(authMiddleware)", () => {
       const stack = notificationRoute.stack || [];
       const internalIdx = stack.findIndex((layer: any) => layer.route?.path === "/internal/trigger-incident" && layer.route?.methods?.post);
+      const commentIdx = stack.findIndex((layer: any) => layer.route?.path === "/internal/trigger-incident-comment" && layer.route?.methods?.post);
       const authIdx = stack.findIndex((layer: any) => !layer.route && layer.handle === authMiddleware);
       assert.ok(internalIdx !== -1, "POST /internal/trigger-incident must exist");
+      assert.ok(commentIdx !== -1, "POST /internal/trigger-incident-comment must exist");
       assert.ok(authIdx !== -1, "authMiddleware must exist on notification router");
       assert.ok(internalIdx < authIdx, "internal M2M route must precede user authMiddleware");
+      assert.ok(commentIdx < authIdx, "internal comment M2M route must precede user authMiddleware");
     });
   });
 
@@ -793,6 +796,109 @@ describe("Internal Incident Notification Trigger & Evidence SSRF Guard", () => {
       });
       assert.strictEqual(newDeviceSent, 1);
       await bus3.close();
+    });
+  });
+
+  describe("Incident Comment M2M Notification (notification:incident_comment)", () => {
+    const incidentId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a6b";
+    const commentId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a77";
+    const siteId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a6c";
+    const adminId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a01";
+    const safetyManagerId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a02";
+    const managerId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a03";
+    const otherOfficerId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a04";
+    const assignedOfficerId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a05";
+    const participantId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a06";
+
+    it("returns dispatchedCount=0 when feature.notifications.enabled is false", async () => {
+      let sseSent = false;
+      const service = new NotificationService(
+        {} as NotificationRepository,
+        {} as MailService,
+        { sendToUser: () => { sseSent = true; } } as unknown as SseManagerService,
+        new EmailTemplateService(),
+        undefined,
+        { getIncidentRecipients: async () => [{ id: adminId, role: ROLES.ADMIN }] },
+        { isFeatureEnabled: async () => false },
+      );
+
+      const res = await service.dispatchIncidentCommentNotification({
+        incidentId,
+        commentId,
+        siteId,
+        authorId: safetyManagerId,
+        comment: "Kiểm tra lại mũ bảo hộ",
+      });
+
+      assert.strictEqual(res.dispatchedCount, 0);
+      assert.deepStrictEqual(res.recipientUserIds, []);
+      assert.strictEqual(sseSent, false);
+    });
+
+    it("merges site management + assigned + participants, excludes authorId and unrelated officers, resolves authorName, respects IN_APP preference, and emits notification:incident_comment SSE", async () => {
+      const sseEvents: Array<{ userId: string; event: any }> = [];
+      let persistedRows: any[] = [];
+
+      const service = new NotificationService(
+        {
+          findPreferencesByUserIds: async () => [
+            // managerId tắt kênh IN_APP -> phải bị lọc bỏ
+            { userId: managerId, channel: NOTIFICATION_CHANNEL.IN_APP, enabled: false, severityThreshold: NOTIFICATION_SEVERITY.LOW },
+            // participantId đặt ngưỡng HIGH (> NORMAL) -> phải bị lọc bỏ
+            { userId: participantId, channel: NOTIFICATION_CHANNEL.IN_APP, enabled: true, severityThreshold: NOTIFICATION_SEVERITY.HIGH },
+          ],
+          createManyNotifications: async (rows: any[]) => {
+            persistedRows = rows;
+            return { count: rows.length };
+          },
+        } as unknown as NotificationRepository,
+        {} as MailService,
+        {
+          sendToUser: (uid: string, event: any) => {
+            sseEvents.push({ userId: uid, event });
+          },
+        } as unknown as SseManagerService,
+        new EmailTemplateService(),
+        undefined,
+        {
+          getIncidentRecipients: async () => [
+            { id: adminId, role: ROLES.ADMIN, fullName: "Admin Hệ thống" },
+            { id: safetyManagerId, role: ROLES.SAFETY_MANAGER, fullName: "Nguyễn Văn Quản Lý" },
+            { id: managerId, role: ROLES.MANAGER, fullName: "Manager Site" },
+            { id: otherOfficerId, role: ROLES.SAFETY_OFFICER, fullName: "Officer Ngoài Cuộc" },
+          ],
+        },
+        { isFeatureEnabled: async () => true },
+      );
+
+      const res = await service.dispatchIncidentCommentNotification({
+        incidentId,
+        commentId,
+        siteId,
+        siteName: "Landmark 81",
+        authorId: safetyManagerId,
+        comment: "Công nhân   đã khắc phục chưa em?",
+        assignedUserIds: [assignedOfficerId],
+        participantUserIds: [participantId, safetyManagerId],
+      });
+
+      assert.strictEqual(res.dispatchedCount, 2);
+      assert.deepStrictEqual(res.recipientUserIds.sort(), [adminId, assignedOfficerId].sort());
+      assert.strictEqual(persistedRows.length, 2);
+      assert.strictEqual(persistedRows[0].channel, NOTIFICATION_CHANNEL.IN_APP);
+      assert.strictEqual(persistedRows[0].severity, NOTIFICATION_SEVERITY.NORMAL);
+      assert.strictEqual(
+        persistedRows[0].title,
+        `Bình luận mới tại sự cố #${incidentId.slice(0, 8)} (Landmark 81)`,
+      );
+      assert.strictEqual(
+        persistedRows[0].content,
+        "[BÌNH LUẬN] Nguyễn Văn Quản Lý: Công nhân đã khắc phục chưa em?",
+      );
+      assert.strictEqual(sseEvents.length, 2);
+      assert.strictEqual(sseEvents[0].event.type, "notification:incident_comment");
+      assert.strictEqual(sseEvents[0].event.data.authorId, safetyManagerId);
+      assert.strictEqual(sseEvents[0].event.data.authorName, "Nguyễn Văn Quản Lý");
     });
   });
 });

@@ -10,6 +10,8 @@ import {
   UnreadCountResponseDto,
   DispatchIncidentNotificationDto,
   DispatchIncidentNotificationResultDto,
+  DispatchIncidentCommentNotificationDto,
+  DispatchIncidentCommentNotificationResultDto,
   NotificationPreferenceDto,
   UpdateNotificationPreferenceDto,
   SendNotificationDto,
@@ -489,26 +491,7 @@ export class NotificationService {
     const usedChannels = new Set<string>();
 
     // 4. Lấy cấu hình nhận thông báo hàng loạt cho toàn bộ người nhận (Chống N+1 query)
-    const allPreferences = this.repository.findPreferencesByUserIds
-      ? await this.repository.findPreferencesByUserIds(recipientIds)
-      : (
-          await Promise.all(
-            recipientIds.map(async (id) => {
-              const prefs = await this.repository.findUserPreferences(id);
-              return prefs.map((p) => ({ ...p, userId: (p as any).userId || id }));
-            }),
-          )
-        ).flat();
-    const userPrefMap = new Map<string, Map<string, (typeof allPreferences)[number]>>();
-    for (const pref of allPreferences) {
-      const uId = (pref as any).userId || (recipientIds.length === 1 ? recipientIds[0] : undefined);
-      if (uId) {
-        if (!userPrefMap.has(uId)) {
-          userPrefMap.set(uId, new Map());
-        }
-        userPrefMap.get(uId)!.set(pref.channel, pref);
-      }
-    }
+    const userPrefMap = await this.loadUserPreferenceMap(recipientIds);
 
     // 5. Lặp qua từng người nhận và áp dụng Preferences
     for (const userId of recipientIds) {
@@ -619,6 +602,175 @@ export class NotificationService {
       dispatchedCount: notificationsToCreate.length,
       channels: Array.from(usedChannels),
       notifications: dispatchedResult,
+    };
+  }
+
+  private async loadUserPreferenceMap(recipientIds: string[]) {
+    const allPreferences = this.repository.findPreferencesByUserIds
+      ? await this.repository.findPreferencesByUserIds(recipientIds)
+      : (
+          await Promise.all(
+            recipientIds.map(async (id) => {
+              const prefs = await this.repository.findUserPreferences(id);
+              return prefs.map((p) => ({ ...p, userId: (p as any).userId || id }));
+            }),
+          )
+        ).flat();
+    const userPrefMap = new Map<string, Map<string, (typeof allPreferences)[number]>>();
+    for (const pref of allPreferences) {
+      const uId =
+        (pref as any).userId ||
+        (recipientIds.length === 1 ? recipientIds[0] : undefined);
+      if (uId) {
+        if (!userPrefMap.has(uId)) {
+          userPrefMap.set(uId, new Map());
+        }
+        userPrefMap.get(uId)!.set(pref.channel, pref);
+      }
+    }
+    return userPrefMap;
+  }
+
+  /**
+   * Phát thông báo IN_APP + SSE realtime khi có bình luận mới trên sự cố (/incidents/[id]).
+   * Không gửi email để tránh spam khi trao đổi hiện trường; tôn trọng feature.notifications.enabled & NotificationPreference.
+   */
+  async dispatchIncidentCommentNotification(
+    dto: DispatchIncidentCommentNotificationDto,
+  ): Promise<DispatchIncidentCommentNotificationResultDto> {
+    if (!(await this.isNotificationsEnabled())) {
+      return {
+        incidentId: dto.incidentId,
+        commentId: dto.commentId,
+        dispatchedCount: 0,
+        recipientUserIds: [],
+      };
+    }
+
+    const siteRecipients = await this.identityClient.getIncidentRecipients(
+      dto.siteId,
+    );
+
+    const managementRoles = new Set<string>([
+      ROLES.ADMIN,
+      ROLES.SAFETY_MANAGER,
+      ROLES.MANAGER,
+    ]);
+    const managementIds = siteRecipients
+      .filter((u) => u.role && managementRoles.has(u.role.toUpperCase()))
+      .map((u) => u.id);
+
+    const recipientSet = new Set<string>([
+      ...managementIds,
+      ...(dto.assignedUserIds || []),
+      ...(dto.participantUserIds || []),
+    ]);
+    recipientSet.delete(dto.authorId);
+
+    const recipientIds = Array.from(recipientSet).filter((id) => isUuid(id));
+    if (recipientIds.length === 0) {
+      return {
+        incidentId: dto.incidentId,
+        commentId: dto.commentId,
+        dispatchedCount: 0,
+        recipientUserIds: [],
+      };
+    }
+
+    const authorFromSite = siteRecipients.find((u) => u.id === dto.authorId);
+    const resolvedAuthorName =
+      dto.authorName?.trim() ||
+      authorFromSite?.fullName?.trim() ||
+      dto.authorEmail?.split("@")[0]?.trim() ||
+      "Cán bộ an toàn";
+
+    const normalizedComment = dto.comment.replace(/\s+/g, " ").trim();
+    const snippet =
+      normalizedComment.length > 180
+        ? normalizedComment.slice(0, 177) + "..."
+        : normalizedComment;
+
+    const shortId = dto.incidentId.slice(0, 8);
+    const rawTitle = dto.siteName
+      ? `Bình luận mới tại sự cố #${shortId} (${dto.siteName})`
+      : `Bình luận mới tại sự cố #${shortId}`;
+    const title = rawTitle.length > 255 ? rawTitle.slice(0, 252) + "..." : rawTitle;
+    const content = `[BÌNH LUẬN] ${resolvedAuthorName}: ${snippet}`;
+    const severity = NOTIFICATION_SEVERITY.NORMAL;
+    const severityWeight = SEVERITY_WEIGHT[severity] || 2;
+    const createdAtIso = dto.createdAt
+      ? new Date(dto.createdAt).toISOString()
+      : new Date().toISOString();
+
+    const userPrefMap = await this.loadUserPreferenceMap(recipientIds);
+    const notificationsToCreate: Array<{
+      userId: string;
+      incidentId: string;
+      templateId: null;
+      channel: string;
+      title: string;
+      content: string;
+      severity: string;
+      status: string;
+      sentAt: Date;
+    }> = [];
+    const deliveredUserIds: string[] = [];
+
+    for (const userId of recipientIds) {
+      const prefMap = userPrefMap.get(userId) || new Map();
+      const inAppPref = prefMap.get(NOTIFICATION_CHANNEL.IN_APP);
+      const inAppEnabled = inAppPref ? inAppPref.enabled : true;
+      const inAppThreshold = (inAppPref?.severityThreshold ||
+        NOTIFICATION_SEVERITY.LOW) as NotificationSeverity;
+      const inAppThresholdWeight = SEVERITY_WEIGHT[inAppThreshold] || 1;
+
+      if (!inAppEnabled || severityWeight < inAppThresholdWeight) {
+        continue;
+      }
+
+      notificationsToCreate.push({
+        userId,
+        incidentId: dto.incidentId,
+        templateId: null,
+        channel: NOTIFICATION_CHANNEL.IN_APP,
+        title,
+        content,
+        severity,
+        status: NOTIFICATION_STATUS.SENT,
+        sentAt: new Date(createdAtIso),
+      });
+      deliveredUserIds.push(userId);
+
+      this.sse.sendToUser(userId, {
+        type: "notification:incident_comment",
+        data: {
+          incidentId: dto.incidentId,
+          commentId: dto.commentId,
+          siteId: dto.siteId,
+          cameraId: dto.cameraId,
+          cameraCode: dto.cameraCode,
+          siteName: dto.siteName,
+          violationType: dto.violationType,
+          authorId: dto.authorId,
+          authorName: resolvedAuthorName,
+          comment: snippet,
+          title,
+          content,
+          severity,
+          createdAt: createdAtIso,
+        },
+      });
+    }
+
+    if (notificationsToCreate.length > 0) {
+      await this.repository.createManyNotifications(notificationsToCreate);
+    }
+
+    return {
+      incidentId: dto.incidentId,
+      commentId: dto.commentId,
+      dispatchedCount: notificationsToCreate.length,
+      recipientUserIds: deliveredUserIds,
     };
   }
 

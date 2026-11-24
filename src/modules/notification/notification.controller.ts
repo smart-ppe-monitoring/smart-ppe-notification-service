@@ -73,6 +73,24 @@ export class NotificationController {
     }
   };
 
+  dispatchInternalIncidentCommentNotification = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const dto = req.body as import("./notification.dto").DispatchIncidentCommentNotificationDto;
+      const result = await this.service.dispatchIncidentCommentNotification(dto);
+      res.status(201).json({
+        success: true,
+        message: "Phát thông báo bình luận sự cố thành công",
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   dispatchIncidentNotification = async (
     req: Request,
     res: Response,

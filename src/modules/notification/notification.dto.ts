@@ -87,6 +87,31 @@ export interface DispatchIncidentNotificationResultDto {
   }>;
 }
 
+export interface DispatchIncidentCommentNotificationDto {
+  incidentId: string;
+  commentId?: string;
+  siteId?: string;
+  cameraId?: string;
+  cameraCode?: string;
+  siteName?: string;
+  violationType?: string;
+  authorId: string;
+  authorName?: string;
+  authorEmail?: string;
+  authorRole?: string;
+  comment: string;
+  assignedUserIds?: string[];
+  participantUserIds?: string[];
+  createdAt?: Date | string;
+}
+
+export interface DispatchIncidentCommentNotificationResultDto {
+  incidentId: string;
+  commentId?: string;
+  dispatchedCount: number;
+  recipientUserIds: string[];
+}
+
 // ─────────────────────────────────────────────
 // User Notification Preferences DTOs
 // ─────────────────────────────────────────────
