@@ -1040,6 +1040,7 @@ export class NotificationService {
     code: string,
     userId: string,
     dto: TestSendNotificationTemplateDto,
+    fallbackEmail?: string | null,
   ): Promise<{ message: string }> {
     await this.assertNotificationsEnabled();
 
@@ -1048,12 +1049,14 @@ export class NotificationService {
     const subject = template.subjectTemplate
       ? renderTemplateString(template.subjectTemplate, dto.variables)
       : template.name;
+    const targetEmail = dto.toEmail || fallbackEmail || undefined;
 
     await this.send({
       userIds: [userId],
       channels: dto.channels || [template.channel as NotificationChannel],
       title: subject,
       content,
+      ...(targetEmail ? { recipientEmails: { [userId]: targetEmail } } : {}),
     });
 
     return {

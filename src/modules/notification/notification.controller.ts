@@ -349,6 +349,7 @@ export class NotificationController {
         req.params.code,
         req.user.id,
         dto,
+        req.user.email,
       );
       res.json({
         success: true,

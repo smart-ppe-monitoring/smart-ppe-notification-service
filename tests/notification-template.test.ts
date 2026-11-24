@@ -7,6 +7,13 @@ import {
   updateNotificationTemplateSchema,
   previewNotificationTemplateSchema,
 } from "../src/modules/notification/notification.validation";
+import { NotificationService } from "../src/modules/notification/notification.service";
+import { NotificationRepository } from "../src/modules/notification/notification.repository";
+import { MailService } from "../src/common/services/mail.service";
+import { SseManagerService } from "../src/common/services/sse-manager.service";
+import { NOTIFICATION_CHANNEL } from "../src/common/constants/notification.constant";
+import { AppError } from "../src/common/errors/app-error";
+import { ERROR_CODE } from "../src/common/errors/error-code";
 
 describe("Notification Template Rendering & Helpers", () => {
   it("should interpolate placeholders correctly in renderTemplateString", () => {
@@ -145,5 +152,120 @@ describe("Notification Template Zod Validation", () => {
     });
 
     assert.equal(parsed.success, true);
+  });
+});
+
+describe("NotificationService.testSendTemplate EMAIL recipient resolution", () => {
+  const userId = "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a61";
+  const emailTemplate = {
+    id: "018f3a2b-c4d5-7e8f-9a0b-1c2d3e4f5a99",
+    code: "PPE_VIOLATION_ALERT",
+    name: "Cảnh báo PPE",
+    channel: NOTIFICATION_CHANNEL.EMAIL,
+    subjectTemplate: "Cảnh báo {{siteName}}",
+    contentTemplate: "Phát hiện vi phạm {{violationType}}",
+    status: "ACTIVE",
+  };
+
+  it("should dispatch EMAIL template using dto.toEmail", async () => {
+    const sentEmails: Array<{ to: string; subject: string; html: string }> = [];
+    const createdRecords: any[] = [];
+
+    const service = new NotificationService(
+      {
+        findTemplateByCode: async () => emailTemplate,
+        createManyNotifications: async (records: any[]) => {
+          createdRecords.push(...records);
+          return { count: records.length };
+        },
+      } as unknown as NotificationRepository,
+      {
+        sendRaw: async (to: string, subject: string, html: string) => {
+          sentEmails.push({ to, subject, html });
+        },
+      } as unknown as MailService,
+      { sendToUser: () => {} } as unknown as SseManagerService,
+      new EmailTemplateService(),
+      undefined,
+      undefined,
+      { isFeatureEnabled: async () => true },
+    );
+
+    const res = await service.testSendTemplate(
+      "PPE_VIOLATION_ALERT",
+      userId,
+      {
+        toEmail: "tester@smartsite.vn",
+        variables: { siteName: "Landmark", violationType: "NO_HELMET" },
+      },
+      "fallback@smartsite.vn",
+    );
+
+    assert.match(res.message, /PPE_VIOLATION_ALERT/);
+    assert.equal(createdRecords.length, 1);
+    assert.equal(sentEmails.length, 1);
+    assert.equal(sentEmails[0].to, "tester@smartsite.vn");
+    assert.equal(sentEmails[0].subject, "Cảnh báo Landmark");
+    assert.match(sentEmails[0].html, /NO_HELMET/);
+  });
+
+  it("should fall back to actor email when dto.toEmail is omitted", async () => {
+    const sentEmails: Array<{ to: string; subject: string }> = [];
+
+    const service = new NotificationService(
+      {
+        findTemplateByCode: async () => emailTemplate,
+        createManyNotifications: async (records: any[]) => ({
+          count: records.length,
+        }),
+      } as unknown as NotificationRepository,
+      {
+        sendRaw: async (to: string, subject: string) => {
+          sentEmails.push({ to, subject });
+        },
+      } as unknown as MailService,
+      { sendToUser: () => {} } as unknown as SseManagerService,
+      new EmailTemplateService(),
+      undefined,
+      undefined,
+      { isFeatureEnabled: async () => true },
+    );
+
+    await service.testSendTemplate(
+      "PPE_VIOLATION_ALERT",
+      userId,
+      {
+        variables: { siteName: "Site B", violationType: "NO_VEST" },
+      },
+      "admin@smartsite.vn",
+    );
+
+    assert.equal(sentEmails.length, 1);
+    assert.equal(sentEmails[0].to, "admin@smartsite.vn");
+  });
+
+  it("should throw 400 VALIDATION_ERROR when both dto.toEmail and fallbackEmail are absent for EMAIL template", async () => {
+    const service = new NotificationService(
+      {
+        findTemplateByCode: async () => emailTemplate,
+      } as unknown as NotificationRepository,
+      {} as unknown as MailService,
+      { sendToUser: () => {} } as unknown as SseManagerService,
+      new EmailTemplateService(),
+      undefined,
+      undefined,
+      { isFeatureEnabled: async () => true },
+    );
+
+    await assert.rejects(
+      () =>
+        service.testSendTemplate("PPE_VIOLATION_ALERT", userId, {
+          variables: { siteName: "Site C", violationType: "NO_HELMET" },
+        }),
+      (err: any) =>
+        err instanceof AppError &&
+        err.statusCode === 400 &&
+        err.code === ERROR_CODE.VALIDATION_ERROR,
+    );
   });
 });
