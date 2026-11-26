@@ -49,6 +49,12 @@ export const NOTIFICATION_CHANNEL = {
 
 export type NotificationChannel = keyof typeof NOTIFICATION_CHANNEL;
 
+/** Các kênh hiển thị trực tiếp trong hộp thư web (Inbox & Unread Count mặc định) */
+export const INBOX_NOTIFICATION_CHANNELS = [
+  NOTIFICATION_CHANNEL.IN_APP,
+  NOTIFICATION_CHANNEL.WEB,
+] as const;
+
 export const NOTIFICATION_STATUS = {
   PENDING: "PENDING",
   SENT: "SENT",

@@ -17,6 +17,7 @@ export interface ListNotificationsDto {
   search?: string;
   fromDate?: string;
   toDate?: string;
+  archived?: boolean;
 }
 
 export interface NotificationItemDto {
@@ -31,9 +32,11 @@ export interface NotificationItemDto {
   status: string;
   sentAt: Date | null;
   readAt: Date | null;
+  archivedAt?: Date | null;
   createdAt: Date;
   // Các trường bổ sung tương thích In-App UI
   isRead?: boolean;
+  deliveredChannels?: string[];
   type?: string;
   priority?: string;
   actionUrl?: string | null;
@@ -260,6 +263,8 @@ export interface ListEmailsDto {
   status?: string;
   toEmail?: string;
   userId?: string;
+  fromDate?: string;
+  toDate?: string;
 }
 
 export interface EmailItemDto {

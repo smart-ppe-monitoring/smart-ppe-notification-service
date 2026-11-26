@@ -62,10 +62,21 @@ router.get("/stream", controller.stream);
 router.get("/", validate(listNotificationsSchema, "query"), controller.list);
 router.get("/unread-count", controller.unreadCount);
 router.patch("/read-all", controller.markAllAsRead);
+router.patch("/archive-read", controller.archiveAllRead);
 router.patch(
   "/:id/read",
   validate(notificationIdParamSchema, "params"),
   controller.markAsRead,
+);
+router.patch(
+  "/:id/archive",
+  validate(notificationIdParamSchema, "params"),
+  controller.archive,
+);
+router.patch(
+  "/:id/unarchive",
+  validate(notificationIdParamSchema, "params"),
+  controller.unarchive,
 );
 router.delete(
   "/:id",
@@ -118,13 +129,19 @@ router.post(
 // ─────────────────────────────────────────────
 router.get(
   "/emails",
-  requirePermission(PERMISSIONS.NOTIFICATION_TEMPLATE_MANAGE),
+  requireAnyPermission(
+    PERMISSIONS.NOTIFICATION_TEMPLATE_MANAGE,
+    PERMISSIONS.NOTIFICATION_UPDATE,
+  ),
   validate(listEmailsSchema, "query"),
   controller.listEmails,
 );
 router.post(
   "/emails/:id/retry",
-  requirePermission(PERMISSIONS.NOTIFICATION_UPDATE),
+  requireAnyPermission(
+    PERMISSIONS.NOTIFICATION_TEMPLATE_MANAGE,
+    PERMISSIONS.NOTIFICATION_UPDATE,
+  ),
   validate(emailIdParamSchema, "params"),
   controller.retryEmail,
 );

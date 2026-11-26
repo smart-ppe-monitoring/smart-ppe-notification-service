@@ -187,16 +187,20 @@ describe("Security Audit Patches - Batch 4 (SEC-12, SEC-13, SEC-14, SEC-15, SEC-
         severity: NOTIFICATION_SEVERITY.CRITICAL,
       });
 
-      // Verify database persistence occurred
-      assert.ok(createdRecords.length >= 2, "Broadcast must persist records in database");
+      // Verify database persistence occurred: 1 record per recipient user (no duplicate SYSTEM_BROADCAST_USER_ID)
+      assert.equal(createdRecords.length, 2, "Broadcast must persist exactly 1 record per recipient user");
       assert.equal(
         createdRecords.some((r) => r.userId === "018f6e7c-8901-789a-bcde-f0123456789a"),
         true,
       );
       assert.equal(
-        createdRecords.some((r) => r.userId === SYSTEM_BROADCAST_USER_ID),
+        createdRecords.some((r) => r.userId === "018f6e7c-8901-789a-bcde-f0123456789b"),
         true,
-        "Must include SYSTEM_BROADCAST_USER_ID for future/offline users",
+      );
+      assert.equal(
+        createdRecords.some((r) => r.userId === SYSTEM_BROADCAST_USER_ID),
+        false,
+        "Must NOT insert duplicate SYSTEM_BROADCAST_USER_ID record when recipient users exist",
       );
 
       // Verify SSE real-time broadcast occurred
@@ -205,6 +209,24 @@ describe("Security Audit Patches - Batch 4 (SEC-12, SEC-13, SEC-14, SEC-15, SEC-
       assert.match(sseEventPayload.data.title, /Khẩn cấp/);
 
       assert.equal(result.totalRecipients, 2);
+
+      // Fallback when no distinct user exists in system
+      let fallbackRecords: any[] = [];
+      const emptyRepo: any = {
+        findDistinctUserIds: async () => [],
+        createManyNotifications: async (records: any[]) => {
+          fallbackRecords = records;
+          return { count: records.length };
+        },
+      };
+      const fallbackService = new NotificationService(emptyRepo, {} as any, mockSse);
+      const fallbackResult = await fallbackService.broadcast({
+        title: "Thông báo khởi tạo",
+        content: "Hệ thống chưa có người dùng",
+      });
+      assert.equal(fallbackRecords.length, 1);
+      assert.equal(fallbackRecords[0].userId, SYSTEM_BROADCAST_USER_ID);
+      assert.equal(fallbackResult.totalRecipients, 1);
     });
   });
 

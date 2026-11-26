@@ -115,6 +115,8 @@ export function registerNotificationOpenApi(): void {
 
     tags: ["Notifications"],
     summary: "Danh sách thông báo của người dùng hiện tại",
+    description:
+      "Mặc định chỉ trả về các kênh hiển thị hộp thư web (IN_APP, WEB) chưa lưu trữ (archivedAt = null) và tự động gộp trường deliveredChannels nếu thông báo được phát đa kênh (VD: IN_APP + EMAIL).",
     security: [{ BearerAuth: [] }],
     request: { query: listNotificationsSchema },
     responses: {
@@ -129,10 +131,13 @@ export function registerNotificationOpenApi(): void {
                   id: z.string().uuid(),
                   title: z.string(),
                   content: z.string(),
+                  channel: z.string(),
+                  deliveredChannels: z.array(z.string()).optional(),
                   type: z.string(),
                   actionUrl: z.string().nullable(),
                   isRead: z.boolean(),
                   readAt: z.string().datetime().nullable(),
+                  archivedAt: z.string().datetime().nullable().optional(),
                   createdAt: z.string().datetime(),
                 }),
               ),
@@ -272,6 +277,77 @@ export function registerNotificationOpenApi(): void {
           },
         },
       },
+    },
+  });
+
+  // PATCH /notifications/archive-read
+  openapiRegistry.registerPath({
+    method: "patch",
+    path: "/notifications/archive-read",
+    tags: ["Notifications"],
+    summary: "Lưu trữ toàn bộ thông báo đã đọc của người dùng hiện tại",
+    security: [{ BearerAuth: [] }],
+    responses: {
+      200: {
+        description: "Lưu trữ thông báo đã đọc thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean().openapi({ example: true }),
+              message: z.string(),
+              data: z.object({ archivedCount: z.number() }),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  // PATCH /notifications/:id/archive
+  openapiRegistry.registerPath({
+    method: "patch",
+    path: "/notifications/{id}/archive",
+    tags: ["Notifications"],
+    summary: "Lưu trữ một thông báo",
+    security: [{ BearerAuth: [] }],
+    request: { params: notificationIdParamSchema },
+    responses: {
+      200: {
+        description: "Đã lưu trữ thông báo",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean().openapi({ example: true }),
+              message: z.string(),
+            }),
+          },
+        },
+      },
+      404: { description: "Không tìm thấy thông báo" },
+    },
+  });
+
+  // PATCH /notifications/:id/unarchive
+  openapiRegistry.registerPath({
+    method: "patch",
+    path: "/notifications/{id}/unarchive",
+    tags: ["Notifications"],
+    summary: "Khôi phục một thông báo khỏi mục lưu trữ",
+    security: [{ BearerAuth: [] }],
+    request: { params: notificationIdParamSchema },
+    responses: {
+      200: {
+        description: "Đã khôi phục thông báo khỏi lưu trữ",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean().openapi({ example: true }),
+              message: z.string(),
+            }),
+          },
+        },
+      },
+      404: { description: "Không tìm thấy thông báo" },
     },
   });
 
@@ -550,6 +626,8 @@ export function registerNotificationOpenApi(): void {
     path: "/notifications/emails",
     tags: ["Email Notifications"],
     summary: "Danh sách lịch sử gửi email và trạng thái hàng đợi",
+    description:
+      "Hỗ trợ lọc theo status, toEmail, userId và khoảng thời gian fromDate / toDate (DD/MM/YYYY, YYYY-MM-DD hoặc ISO 8601). Yêu cầu quyền NOTIFICATION_TEMPLATE_MANAGE hoặc NOTIFICATION_UPDATE.",
     security: [{ BearerAuth: [] }],
     request: { query: listEmailsSchema },
     responses: {
@@ -582,6 +660,11 @@ export function registerNotificationOpenApi(): void {
           },
         },
       },
+      403: {
+        description:
+          "Thiếu quyền NOTIFICATION_TEMPLATE_MANAGE hoặc NOTIFICATION_UPDATE",
+      },
+      422: { description: "Tham số lọc ngày hoặc truy vấn không hợp lệ" },
     },
   });
 
@@ -591,6 +674,8 @@ export function registerNotificationOpenApi(): void {
     path: "/notifications/emails/{id}/retry",
     tags: ["Email Notifications"],
     summary: "Gửi lại (Retry) một email thất bại trong hàng đợi",
+    description:
+      "Yêu cầu quyền NOTIFICATION_TEMPLATE_MANAGE hoặc NOTIFICATION_UPDATE.",
     security: [{ BearerAuth: [] }],
     request: { params: emailIdParamSchema },
     responses: {
@@ -606,6 +691,10 @@ export function registerNotificationOpenApi(): void {
             }),
           },
         },
+      },
+      403: {
+        description:
+          "Thiếu quyền NOTIFICATION_TEMPLATE_MANAGE hoặc NOTIFICATION_UPDATE",
       },
       404: { description: "Không tìm thấy email" },
     },

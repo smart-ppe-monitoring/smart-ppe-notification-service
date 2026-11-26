@@ -157,6 +157,37 @@ export class NotificationController {
     }
   };
 
+  archive = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await this.service.archive(req.user.id, req.params.id);
+      res.json({ success: true, message: "Đã lưu trữ thông báo" });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  unarchive = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await this.service.unarchive(req.user.id, req.params.id);
+      res.json({ success: true, message: "Đã khôi phục thông báo khỏi lưu trữ" });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  archiveAllRead = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await this.service.archiveAllRead(req.user.id);
+      res.json({
+        success: true,
+        message: "Đã lưu trữ toàn bộ thông báo đã đọc",
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   delete = async (req: Request, res: Response, next: NextFunction) => {
     try {
       await this.service.delete(req.user.id, req.params.id);

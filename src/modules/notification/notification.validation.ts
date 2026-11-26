@@ -3,12 +3,42 @@ import {
   isPublicHttpUrl,
   isSafeEvidenceUrl,
 } from "../../common/helpers/url.helper";
+import {
+  VIETNAM_DATE_REGEX,
+  ISO_DATE_REGEX,
+} from "../../common/constants/date.constant";
+import { getVietnamDayRange } from "../../common/helpers/date.helper";
 import { envConfig } from "../../config/env.config";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
   NOTIFICATION_STATUS,
 } from "../../common/constants/notification.constant";
+
+const dateFilterStringSchema = z
+  .string()
+  .trim()
+  .max(50, "Định dạng ngày tối đa 50 ký tự")
+  .refine((val) => {
+    if (!val) return false;
+    if (VIETNAM_DATE_REGEX.test(val) || ISO_DATE_REGEX.test(val)) {
+      try {
+        getVietnamDayRange(val);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return !Number.isNaN(Date.parse(val));
+  }, "Ngày không hợp lệ (hỗ trợ DD/MM/YYYY, YYYY-MM-DD hoặc ISO 8601)");
+
+function resolveDateBoundaryMs(value: string, bound: "start" | "end"): number {
+  if (VIETNAM_DATE_REGEX.test(value) || ISO_DATE_REGEX.test(value)) {
+    const range = getVietnamDayRange(value);
+    return (bound === "start" ? range.startOfDay : range.endOfDay).getTime();
+  }
+  return new Date(value).getTime();
+}
 
 export const listNotificationsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -29,6 +59,10 @@ export const listNotificationsSchema = z.object({
   search: z.string().trim().max(200).optional(),
   fromDate: z.string().datetime({ offset: true }).optional(),
   toDate: z.string().datetime({ offset: true }).optional(),
+  archived: z
+    .enum(["true", "false"])
+    .transform((v) => v === "true")
+    .optional(),
 });
 
 export const notificationIdParamSchema = z.object({
@@ -192,13 +226,29 @@ export const broadcastNotificationSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
-export const listEmailsSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  status: z.enum(["PENDING", "PROCESSING", "SENT", "FAILED"]).optional(),
-  toEmail: z.string().optional(),
-  userId: z.string().uuid().optional(),
-});
+export const listEmailsSchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    status: z.enum(["PENDING", "PROCESSING", "SENT", "FAILED"]).optional(),
+    toEmail: z.string().optional(),
+    userId: z.string().uuid().optional(),
+    fromDate: dateFilterStringSchema.optional(),
+    toDate: dateFilterStringSchema.optional(),
+  })
+  .refine(
+    (data) => {
+      if (!data.fromDate || !data.toDate) return true;
+      return (
+        resolveDateBoundaryMs(data.fromDate, "start") <=
+        resolveDateBoundaryMs(data.toDate, "end")
+      );
+    },
+    {
+      message: "fromDate phải nhỏ hơn hoặc bằng toDate",
+      path: ["fromDate"],
+    },
+  );
 
 // ─────────────────────────────────────────────
 // Notification Template Validation

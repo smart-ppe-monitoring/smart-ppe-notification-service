@@ -827,6 +827,27 @@ export class NotificationService {
     await this.repository.delete(notificationId, userId);
   }
 
+  async archive(userId: string, notificationId: string): Promise<void> {
+    const notification = await this.repository.findOne(notificationId, userId);
+    if (!notification) {
+      throw new AppError("Không tìm thấy thông báo", 404, ERROR_CODE.NOT_FOUND);
+    }
+    await this.repository.archive(notificationId, userId);
+  }
+
+  async unarchive(userId: string, notificationId: string): Promise<void> {
+    const notification = await this.repository.findOne(notificationId, userId);
+    if (!notification) {
+      throw new AppError("Không tìm thấy thông báo", 404, ERROR_CODE.NOT_FOUND);
+    }
+    await this.repository.unarchive(notificationId, userId);
+  }
+
+  async archiveAllRead(userId: string): Promise<{ archivedCount: number }> {
+    const result = await this.repository.archiveAllRead(userId);
+    return { archivedCount: result.count };
+  }
+
   // ─────────────────────────────────────────────
   // User Notification Preferences Management
   // ─────────────────────────────────────────────
@@ -998,9 +1019,16 @@ export class NotificationService {
       await assertSafePublicUrl(dto.actionUrl);
     }
 
-    // SEC-15: Lưu trữ thông báo broadcast vào CSDL PostgreSQL để người dùng offline khi đăng nhập vẫn nhận được
+    // SEC-15 & Issue #2: Lưu trữ thông báo broadcast theo từng user để mỗi user tự chủ đọc/lưu trữ/xóa
+    // mà không bị nhân đôi với bản ghi SYSTEM_BROADCAST_USER_ID. Chỉ fallback về SYSTEM_BROADCAST_USER_ID nếu chưa có user nào.
     const userIds = await this.repository.findDistinctUserIds();
-    const recipientUserIds = userIds.length > 0 ? userIds : [SYSTEM_BROADCAST_USER_ID];
+    const uniqueUserIds = Array.from(
+      new Set(
+        userIds.filter((id) => isUuid(id) && id !== SYSTEM_BROADCAST_USER_ID),
+      ),
+    );
+    const recipientUserIds =
+      uniqueUserIds.length > 0 ? uniqueUserIds : [SYSTEM_BROADCAST_USER_ID];
 
     const records = recipientUserIds.map((uid) => ({
       userId: uid,
@@ -1013,20 +1041,6 @@ export class NotificationService {
       status: NOTIFICATION_STATUS.SENT,
       sentAt: new Date(),
     }));
-
-    if (userIds.length > 0 && !userIds.includes(SYSTEM_BROADCAST_USER_ID)) {
-      records.push({
-        userId: SYSTEM_BROADCAST_USER_ID,
-        incidentId: null,
-        templateId: null,
-        channel: NOTIFICATION_CHANNEL.IN_APP,
-        title: safeTitle,
-        content: dto.content,
-        severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
-        status: NOTIFICATION_STATUS.SENT,
-        sentAt: new Date(),
-      });
-    }
 
     await this.repository.createManyNotifications(records);
 

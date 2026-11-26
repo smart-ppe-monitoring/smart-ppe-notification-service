@@ -8,11 +8,17 @@ import {
   NOTIFICATION_STATUS,
   NOTIFICATION_SEVERITY,
   NOTIFICATION_CHANNEL,
+  INBOX_NOTIFICATION_CHANNELS,
   NOTIFICATION_TEMPLATE_STATUS,
   EMAIL_STATUS,
   EMAIL_MAX_ATTEMPTS,
   SYSTEM_BROADCAST_USER_ID,
 } from "../../common/constants/notification.constant";
+import {
+  VIETNAM_DATE_REGEX,
+  ISO_DATE_REGEX,
+} from "../../common/constants/date.constant";
+import { getVietnamDayRange } from "../../common/helpers/date.helper";
 import {
   calculatePaginationSkip,
   formatPaginationMeta,
@@ -47,24 +53,40 @@ export interface ClaimedEmailRecord {
 export class NotificationRepository {
   private readonly db = notificationPrisma;
 
+  private parseDateBoundary(value: string, bound: "start" | "end"): Date {
+    if (VIETNAM_DATE_REGEX.test(value) || ISO_DATE_REGEX.test(value)) {
+      const range = getVietnamDayRange(value);
+      return bound === "start" ? range.startOfDay : range.endOfDay;
+    }
+    return new Date(value);
+  }
+
   // ─────────────────────────────────────────────
   // User Notifications Inbox (ppe_notification_db)
   // ─────────────────────────────────────────────
 
   async findMany(userId: string, dto: ListNotificationsDto) {
-    const { isRead, status, severity, channel, incidentId, type, search, fromDate, toDate } = dto;
+    const {
+      isRead,
+      status,
+      severity,
+      channel,
+      incidentId,
+      type,
+      search,
+      fromDate,
+      toDate,
+      archived,
+    } = dto;
     const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
 
     // SEC-41: Loại bỏ các thông báo đã bị soft delete (deletedAt !== null)
     // SEC-38: Tích hợp đầy đủ bộ lọc tìm kiếm search (title, content) và type (ALERT, NOTIFICATION, template code)
+    // Issue #2: Lọc chính xác theo userId sở hữu và trạng thái lưu trữ archivedAt
     const andConditions: NotificationPrisma.NotificationWhereInput[] = [
-      {
-        OR: [
-          { userId },
-          { userId: SYSTEM_BROADCAST_USER_ID },
-        ],
-      },
+      { userId },
       { deletedAt: null },
+      archived === true ? { archivedAt: { not: null } } : { archivedAt: null },
     ];
 
     if (search) {
@@ -117,6 +139,8 @@ export class NotificationRepository {
 
     if (channel) {
       where.channel = channel;
+    } else {
+      where.channel = { in: [...INBOX_NOTIFICATION_CHANNELS] };
     }
 
     if (incidentId) {
@@ -148,26 +172,93 @@ export class NotificationRepository {
       this.db.notification.count({ where }),
     ]);
 
-    const formattedItems: NotificationItemDto[] = items.map((item) => ({
-      id: item.id,
-      userId: item.userId,
-      incidentId: item.incidentId,
-      templateId: item.templateId,
-      channel: item.channel,
-      title: item.title,
-      content: item.content,
-      severity: item.severity,
-      status: item.status,
-      sentAt: item.sentAt,
-      readAt: item.readAt,
-      createdAt: item.createdAt,
-      isRead: item.status === NOTIFICATION_STATUS.READ || Boolean(item.readAt),
-      priority: item.severity,
-      type:
-        item.severity === NOTIFICATION_SEVERITY.CRITICAL
-          ? NOTIFICATION_TYPE.ALERT
-          : NOTIFICATION_TYPE.INFO,
-    }));
+    let siblingDeliveries: Array<{
+      incidentId: string | null;
+      title: string;
+      channel: string;
+      createdAt: Date;
+    }> = [];
+
+    if (items.length > 0 && !channel) {
+      try {
+        const pageIncidentIds = Array.from(
+          new Set(items.map((i) => i.incidentId).filter((id): id is string => Boolean(id))),
+        );
+        const pageTitles = Array.from(new Set(items.map((i) => i.title).filter(Boolean)));
+        const siblingOr: NotificationPrisma.NotificationWhereInput[] = [];
+        if (pageIncidentIds.length > 0) {
+          siblingOr.push({ incidentId: { in: pageIncidentIds } });
+        }
+        if (pageTitles.length > 0) {
+          siblingOr.push({ incidentId: null, title: { in: pageTitles } });
+        }
+
+        if (siblingOr.length > 0) {
+          const rows = await this.db.notification.findMany({
+            where: {
+              userId,
+              deletedAt: null,
+              channel: { notIn: [...INBOX_NOTIFICATION_CHANNELS] },
+              OR: siblingOr,
+            },
+            select: {
+              incidentId: true,
+              title: true,
+              channel: true,
+              createdAt: true,
+            },
+          });
+          if (Array.isArray(rows)) {
+            siblingDeliveries = rows;
+          }
+        }
+      } catch {
+        siblingDeliveries = [];
+      }
+    }
+
+    const formattedItems: NotificationItemDto[] = items.map((item) => {
+      const channels = new Set<string>([item.channel]);
+      if (!channel && siblingDeliveries.length > 0) {
+        const itemTime = new Date(item.createdAt).getTime();
+        for (const sib of siblingDeliveries) {
+          if (item.incidentId) {
+            if (sib.incidentId === item.incidentId && sib.title === item.title) {
+              channels.add(sib.channel);
+            }
+          } else if (
+            sib.incidentId === null &&
+            sib.title === item.title &&
+            Math.abs(new Date(sib.createdAt).getTime() - itemTime) <= 60_000
+          ) {
+            channels.add(sib.channel);
+          }
+        }
+      }
+
+      return {
+        id: item.id,
+        userId: item.userId,
+        incidentId: item.incidentId,
+        templateId: item.templateId,
+        channel: item.channel,
+        title: item.title,
+        content: item.content,
+        severity: item.severity,
+        status: item.status,
+        sentAt: item.sentAt,
+        readAt: item.readAt,
+        archivedAt: (item as any).archivedAt ?? null,
+        createdAt: item.createdAt,
+        isRead: item.status === NOTIFICATION_STATUS.READ || Boolean(item.readAt),
+        deliveredChannels: Array.from(channels),
+        priority: item.severity,
+        type:
+          item.severity === NOTIFICATION_SEVERITY.CRITICAL
+            ? NOTIFICATION_TYPE.ALERT
+            : NOTIFICATION_TYPE.INFO,
+      };
+    });
 
     return [formattedItems, total, formatPaginationMeta(page, limit, total)] as const;
   }
@@ -177,6 +268,8 @@ export class NotificationRepository {
       where: {
         userId,
         deletedAt: null,
+        archivedAt: null,
+        channel: { in: [...INBOX_NOTIFICATION_CHANNELS] },
         status: { not: NOTIFICATION_STATUS.READ },
       },
     });
@@ -220,11 +313,46 @@ export class NotificationRepository {
       where: {
         userId,
         deletedAt: null,
+        archivedAt: null,
+        channel: { in: [...INBOX_NOTIFICATION_CHANNELS] },
         status: { in: [NOTIFICATION_STATUS.SENT, "DELIVERED"] },
       },
       data: {
         status: NOTIFICATION_STATUS.READ,
         readAt: new Date(),
+      },
+    });
+  }
+
+  async archive(id: string, userId: string) {
+    return this.db.notification.updateMany({
+      where: { id, userId, deletedAt: null },
+      data: {
+        archivedAt: new Date(),
+      },
+    });
+  }
+
+  async unarchive(id: string, userId: string) {
+    return this.db.notification.updateMany({
+      where: { id, userId, deletedAt: null },
+      data: {
+        archivedAt: null,
+      },
+    });
+  }
+
+  async archiveAllRead(userId: string) {
+    return this.db.notification.updateMany({
+      where: {
+        userId,
+        deletedAt: null,
+        archivedAt: null,
+        channel: { in: [...INBOX_NOTIFICATION_CHANNELS] },
+        status: NOTIFICATION_STATUS.READ,
+      },
+      data: {
+        archivedAt: new Date(),
       },
     });
   }
@@ -574,15 +702,24 @@ export class NotificationRepository {
     if (dto.status) where.status = dto.status;
     if (dto.toEmail) where.toEmail = { contains: dto.toEmail, mode: "insensitive" };
     if (dto.userId) where.userId = dto.userId;
+    if (dto.fromDate || dto.toDate) {
+      where.createdAt = {};
+      if (dto.fromDate) {
+        where.createdAt.gte = this.parseDateBoundary(dto.fromDate, "start");
+      }
+      if (dto.toDate) {
+        where.createdAt.lte = this.parseDateBoundary(dto.toDate, "end");
+      }
+    }
 
     const [items, total] = await Promise.all([
-      (notificationPrisma as any).emailNotification.findMany({
+      (this.db as any).emailNotification.findMany({
         where,
         orderBy: { createdAt: "desc" },
         skip,
         take,
       }),
-      (notificationPrisma as any).emailNotification.count({ where }),
+      (this.db as any).emailNotification.count({ where }),
     ]);
 
     return {
