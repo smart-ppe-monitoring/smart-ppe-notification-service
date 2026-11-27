@@ -124,6 +124,15 @@ export const DEFAULT_EMAIL_SUBJECTS: Record<string, string> = {
   CUSTOM: "Thông báo từ hệ thống",
 };
 
+/** Các kênh thông báo cá nhân có triển khai thực tế và hỗ trợ cấu hình tại /preferences */
+export const SUPPORTED_PREFERENCE_CHANNELS = [
+  NOTIFICATION_CHANNEL.IN_APP,
+  NOTIFICATION_CHANNEL.EMAIL,
+] as const;
+
+export type SupportedPreferenceChannel =
+  (typeof SUPPORTED_PREFERENCE_CHANNELS)[number];
+
 export const DEFAULT_PREFERENCES = [
   {
     channel: NOTIFICATION_CHANNEL.IN_APP,

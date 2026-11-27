@@ -51,6 +51,7 @@ import {
   NOTIFICATION_STATUS,
   SEVERITY_WEIGHT,
   DEFAULT_PREFERENCES,
+  SUPPORTED_PREFERENCE_CHANNELS,
   DEFAULT_EMAIL_SUBJECTS,
   EMAIL_STATUS,
   EMAIL_TEMPLATE_KEY,
@@ -856,7 +857,13 @@ export class NotificationService {
   // GET /preferences chỉ đọc dữ liệu, tuyệt đối không được phép ghi (upsert) vào CSDL nếu người dùng chưa có cấu hình.
   // Trả về cấu hình đã lưu kết hợp với cấu hình mặc định (in-memory) cho các kênh còn thiếu mà không gây side-effect.
   async getUserPreferences(userId: string): Promise<NotificationPreferenceDto[]> {
-    const preferences = await this.repository.findUserPreferences(userId);
+    const supportedChannels = new Set<string>(
+      DEFAULT_PREFERENCES.map((d) => d.channel),
+    );
+    const rawPreferences = await this.repository.findUserPreferences(userId);
+    const preferences = rawPreferences.filter((p) =>
+      supportedChannels.has(p.channel),
+    );
     const existingChannels = new Set(preferences.map((p) => p.channel));
     const merged = [...preferences];
 
@@ -881,6 +888,13 @@ export class NotificationService {
     userId: string,
     dto: UpdateNotificationPreferenceDto,
   ): Promise<NotificationPreferenceDto> {
+    if (!new Set<string>(SUPPORTED_PREFERENCE_CHANNELS).has(dto.channel)) {
+      throw new AppError(
+        "Kênh cấu hình thông báo cá nhân chỉ hỗ trợ IN_APP và EMAIL",
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
     return this.repository.upsertPreference(
       userId,
       dto.channel,

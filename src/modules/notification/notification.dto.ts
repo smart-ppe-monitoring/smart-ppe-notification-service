@@ -2,6 +2,7 @@ import {
   NotificationChannel,
   NotificationSeverity,
   NotificationStatus,
+  SupportedPreferenceChannel,
 } from "../../common/constants/notification.constant";
 import { PaginationMeta } from "../../common/types/pagination.type";
 
@@ -130,7 +131,7 @@ export interface NotificationPreferenceDto {
 }
 
 export interface UpdateNotificationPreferenceDto {
-  channel: NotificationChannel;
+  channel: SupportedPreferenceChannel;
   enabled: boolean;
   severityThreshold?: NotificationSeverity;
 }

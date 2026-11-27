@@ -13,6 +13,7 @@ import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
   NOTIFICATION_STATUS,
+  SUPPORTED_PREFERENCE_CHANNELS,
 } from "../../common/constants/notification.constant";
 
 const dateFilterStringSchema = z
@@ -158,8 +159,10 @@ export const dispatchIncidentCommentNotificationSchema = z.object({
 // ─────────────────────────────────────────────
 
 export const updateNotificationPreferenceSchema = z.object({
-  channel: z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"], {
-    errorMap: () => ({ message: "Kênh thông báo không hợp lệ" }),
+  channel: z.enum(SUPPORTED_PREFERENCE_CHANNELS, {
+    errorMap: () => ({
+      message: "Kênh cấu hình thông báo cá nhân chỉ hỗ trợ IN_APP và EMAIL",
+    }),
   }),
   enabled: z.boolean({ required_error: "Trạng thái bật/tắt enabled là bắt buộc" }),
   severityThreshold: z
