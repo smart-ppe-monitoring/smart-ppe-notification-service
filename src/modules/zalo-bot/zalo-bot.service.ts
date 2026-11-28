@@ -10,8 +10,17 @@ import {
   ZALO_LINK_TOKEN_TTL_MS,
   ZALO_MAX_TEXT_LENGTH,
 } from "../../common/constants/notification.constant";
-import { isPublicHttpUrl } from "../../common/helpers/url.helper";
+import {
+  isPublicHttpUrl,
+  isSafeInternalEvidencePath,
+  isTrustedMinioEvidenceUrl,
+} from "../../common/helpers/url.helper";
 import { isAutomatedTestRuntime } from "../../common/helpers/runtime.helper";
+import {
+  ZaloEvidenceAsset,
+  ZaloEvidenceFetcher,
+  defaultInternalEvidenceFetcher,
+} from "./zalo-evidence.fetcher";
 import {
   zaloBotClient,
   ZaloBotClient,
@@ -45,8 +54,13 @@ import {
   ZaloLinkTokenResponseDto,
 } from "./zalo-bot.dto";
 
+export type { ZaloEvidenceAsset, ZaloEvidenceFetcher };
+export { defaultInternalEvidenceFetcher };
+
 export interface PpeViolationZaloPayload extends FormatPpeViolationZaloParams {
   evidenceUrl?: string;
+  referenceEvidenceUrl?: string;
+  preloadedAsset?: ZaloEvidenceAsset | null;
 }
 
 export interface DispatchZaloResult {
@@ -114,6 +128,7 @@ export class ZaloBotService {
     "findUserPreferenceForChannel" | "upsertPreference"
   >;
   private readonly sse: Pick<SseManagerService, "sendToUser">;
+  private readonly evidenceFetcher: ZaloEvidenceFetcher;
   private readonly linkFailureTracker = new Map<string, SlidingWindowCounter>();
   private readonly replyRateTracker = new Map<string, SlidingWindowCounter>();
   private readonly hintCooldownTracker = new Map<string, number>();
@@ -126,11 +141,13 @@ export class ZaloBotService {
       "findUserPreferenceForChannel" | "upsertPreference"
     >,
     sse?: Pick<SseManagerService, "sendToUser">,
+    evidenceFetcher?: ZaloEvidenceFetcher,
   ) {
     this.repository = repository || zaloBotRepository;
     this.client = client || zaloBotClient;
     this.notifRepo = notifRepo || notificationRepository;
     this.sse = sse || sseManagerService;
+    this.evidenceFetcher = evidenceFetcher || defaultInternalEvidenceFetcher;
   }
 
   private pruneTrackerMap<V>(
@@ -719,18 +736,21 @@ export class ZaloBotService {
     }
 
     const markdownText = formatPpeViolationZaloMessage(data);
+    // Phương án 1: Ưu tiên ảnh vi phạm (evidenceUrl / SNAPSHOT); chỉ dùng referenceEvidenceUrl nếu thiếu evidenceUrl
+    const primaryPhotoUrl = data.evidenceUrl || data.referenceEvidenceUrl;
+    const plainCaption = formatPpeViolationZaloCaption(data);
+
     const canSendPublicPhoto = Boolean(
-      data.evidenceUrl &&
-        data.evidenceUrl.startsWith("https://") &&
-        isPublicHttpUrl(data.evidenceUrl, { allowPrivate: false }),
+      primaryPhotoUrl &&
+        primaryPhotoUrl.startsWith("https://") &&
+        isPublicHttpUrl(primaryPhotoUrl, { allowPrivate: false }),
     );
 
-    if (canSendPublicPhoto && data.evidenceUrl) {
-      const plainCaption = formatPpeViolationZaloCaption(data);
+    if (canSendPublicPhoto && primaryPhotoUrl) {
       try {
         const photoRes: ZaloMessageResult = await this.client.sendPhoto({
           chatId,
-          photo: data.evidenceUrl,
+          photo: primaryPhotoUrl,
           caption: plainCaption,
         });
         return {
@@ -739,7 +759,7 @@ export class ZaloBotService {
         };
       } catch (err: any) {
         console.warn(
-          `[ZaloBotService] sendPhoto thất bại, chuyển sang sendMessage fallback:`,
+          `[ZaloBotService] sendPhoto (URL) thất bại, chuyển sang sendMessage fallback:`,
           redactBotToken(err?.message || String(err)),
         );
         const fallbackRes = await this.client.sendMessage({
@@ -755,6 +775,58 @@ export class ZaloBotService {
       }
     }
 
+    const isInternalPhotoSource = Boolean(
+      primaryPhotoUrl &&
+        (isSafeInternalEvidencePath(primaryPhotoUrl) ||
+          isTrustedMinioEvidenceUrl(
+            primaryPhotoUrl,
+            envConfig.minio.endpoint,
+            envConfig.minio.bucketEvidences,
+          )),
+    );
+
+    if (isInternalPhotoSource && primaryPhotoUrl) {
+      try {
+        const asset =
+          data.preloadedAsset !== undefined
+            ? data.preloadedAsset
+            : await this.evidenceFetcher(primaryPhotoUrl, data.incidentId);
+        if (asset) {
+          const photoRes: ZaloMessageResult =
+            await this.client.sendPhotoBuffer({
+              chatId,
+              photoBuffer: asset.buffer,
+              fileName: asset.fileName,
+              mimeType: asset.mimeType,
+              caption: plainCaption,
+            });
+          return {
+            messageId: photoRes.message_id,
+            method: "sendPhoto",
+          };
+        }
+        console.warn(
+          "[ZaloBotService] Không tải được ảnh bằng chứng nội bộ, chuyển sang sendMessage fallback",
+        );
+      } catch (err: any) {
+        console.warn(
+          `[ZaloBotService] sendPhotoBuffer thất bại, chuyển sang sendMessage fallback:`,
+          redactBotToken(err?.message || String(err)),
+        );
+      }
+
+      const fallbackRes = await this.client.sendMessage({
+        chatId,
+        text: markdownText,
+        parseMode: "markdown",
+      });
+      return {
+        messageId: fallbackRes.message_id,
+        method: "sendMessage",
+        fallbackFromPhoto: true,
+      };
+    }
+
     const msgRes = await this.client.sendMessage({
       chatId,
       text: markdownText,
@@ -764,6 +836,40 @@ export class ZaloBotService {
       messageId: msgRes.message_id,
       method: "sendMessage",
     };
+  }
+
+  /**
+   * Tải trước đúng 1 lần binary ảnh bằng chứng nội bộ cho cả đợt phát cảnh báo tới nhiều người nhận Zalo.
+   */
+  async preloadEvidenceAsset(data: {
+    incidentId: string;
+    evidenceUrl?: string;
+    referenceEvidenceUrl?: string;
+  }): Promise<ZaloEvidenceAsset | null> {
+    if (!this.client.isConfigured()) {
+      return null;
+    }
+    const primaryPhotoUrl = data.evidenceUrl || data.referenceEvidenceUrl;
+    if (!primaryPhotoUrl) {
+      return null;
+    }
+    if (
+      primaryPhotoUrl.startsWith("https://") &&
+      isPublicHttpUrl(primaryPhotoUrl, { allowPrivate: false })
+    ) {
+      return null;
+    }
+    const isInternalPhotoSource =
+      isSafeInternalEvidencePath(primaryPhotoUrl) ||
+      isTrustedMinioEvidenceUrl(
+        primaryPhotoUrl,
+        envConfig.minio.endpoint,
+        envConfig.minio.bucketEvidences,
+      );
+    if (!isInternalPhotoSource) {
+      return null;
+    }
+    return this.evidenceFetcher(primaryPhotoUrl, data.incidentId);
   }
 
   async dispatchGenericMessage(

@@ -16,7 +16,11 @@ import { JWT_PURPOSE } from "../src/common/constants/jwt.constant";
 import { PERMISSIONS } from "../src/common/constants/permission.constant";
 import { ROLES } from "../src/common/constants/role.constant";
 import { ZaloBotPollingWorker } from "../src/common/workers/zalo-bot-polling.worker";
-import { isPublicHttpUrl } from "../src/common/helpers/url.helper";
+import {
+  extractInternalEvidenceId,
+  isPublicHttpUrl,
+  isSafeInternalEvidencePath,
+} from "../src/common/helpers/url.helper";
 import {
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
@@ -37,6 +41,7 @@ import {
   hashLinkCode,
   maskChatId,
 } from "../src/modules/zalo-bot/zalo-bot.service";
+import { createInternalEvidenceFetcher } from "../src/modules/zalo-bot/zalo-evidence.fetcher";
 import { setZaloWebhookSchema } from "../src/modules/zalo-bot/zalo-bot.validation";
 import { NotificationService } from "../src/modules/notification/notification.service";
 import { AppError } from "../src/common/errors/app-error";
@@ -97,7 +102,12 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
 
       const mockFetch = (async (input: string | URL, init?: RequestInit) => {
         const url = String(input);
-        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        const body =
+          init?.body instanceof FormData
+            ? init.body
+            : init?.body
+              ? JSON.parse(String(init.body))
+              : {};
         calls.push({ url, body });
 
         if (url.endsWith("/getMe")) {
@@ -211,6 +221,20 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
       });
       assert.equal(photoRes.message_id, "msg_123");
 
+      const photoBufferRes = await client.sendPhotoBuffer({
+        chatId: "chat-1",
+        photoBuffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+        fileName: "snap.jpg",
+        mimeType: "image/jpeg",
+        caption: "PPE Multipart Snapshot",
+      });
+      assert.equal(photoBufferRes.message_id, "msg_123");
+      const lastCallBody = calls.at(-1)?.body;
+      assert.equal(lastCallBody instanceof FormData, true);
+      assert.equal(lastCallBody.get("chat_id"), "chat-1");
+      assert.equal(lastCallBody.get("caption"), "PPE Multipart Snapshot");
+      assert.ok(lastCallBody.get("photo") instanceof Blob);
+
       const webhookRes = await client.setWebhook({
         url: "https://api.example.com/api/v1/notifications/zalo/webhook",
         secretToken: "super_secret_token_123",
@@ -298,8 +322,25 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
       const prefs = new Map<string, { channel: string; enabled: boolean; severityThreshold: string }>();
       const sentMessages: Array<{ chatId: string; text: string; parseMode?: string }> = [];
       const sentPhotos: Array<{ chatId: string; photo: string; caption?: string }> = [];
+      const sentPhotoBuffers: Array<{
+        chatId: string;
+        photoBuffer: Buffer;
+        fileName?: string;
+        mimeType?: string;
+        caption?: string;
+      }> = [];
+      const fetchedUrls: string[] = [];
       const sseEvents: Array<{ userId: string; event: any }> = [];
       let failPhoto = false;
+      let nextEvidenceAsset: {
+        buffer: Buffer;
+        mimeType: string;
+        fileName: string;
+      } | null = {
+        buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+        mimeType: "image/jpeg",
+        fileName: "snapshot.jpg",
+      };
 
       const mockRepo = {
         findBindingByUserId: async (uid: string) => bindingsByUser.get(uid) || null,
@@ -369,6 +410,13 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
           sentPhotos.push(p);
           return { message_id: `p-${sentPhotos.length}`, date: Date.now() };
         },
+        sendPhotoBuffer: async (p: any) => {
+          if (failPhoto) {
+            throw new ZaloBotApiError("Multipart upload failed", 400);
+          }
+          sentPhotoBuffers.push(p);
+          return { message_id: `pb-${sentPhotoBuffers.length}`, date: Date.now() };
+        },
       };
 
       const mockNotifRepo = {
@@ -392,6 +440,10 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
         mockClient as any,
         mockNotifRepo as any,
         mockSse as any,
+        async (url: string) => {
+          fetchedUrls.push(url);
+          return nextEvidenceAsset;
+        },
       );
 
       return {
@@ -401,9 +453,16 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
         prefs,
         sentMessages,
         sentPhotos,
+        sentPhotoBuffers,
+        fetchedUrls,
         sseEvents,
         setFailPhoto: (val: boolean) => {
           failPhoto = val;
+        },
+        setNextEvidenceAsset: (
+          asset: { buffer: Buffer; mimeType: string; fileName: string } | null,
+        ) => {
+          nextEvidenceAsset = asset;
         },
       };
     }
@@ -543,6 +602,142 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
       });
       assert.equal(resFallback.method, "sendMessage");
       assert.equal(resFallback.fallbackFromPhoto, true);
+    });
+
+    it("supports /api/v1/evidences/:id/download-url multipart upload (Phương án 1: prioritizes SNAPSHOT over REFERENCE_SNAPSHOT) and falls back cleanly", async () => {
+      assert.equal(
+        isSafeInternalEvidencePath("/api/v1/evidences/11111111-1111-4111-8111-111111111111/download-url"),
+        true,
+      );
+      assert.equal(
+        extractInternalEvidenceId("/api/v1/evidences/11111111-1111-4111-8111-111111111111/download-url"),
+        "11111111-1111-4111-8111-111111111111",
+      );
+
+      const ctx = createInMemoryZaloService();
+      const snapshotPath = "/api/v1/evidences/11111111-1111-4111-8111-111111111111/download-url";
+      const referencePath = "/api/v1/evidences/22222222-2222-4222-8222-222222222222/download-url";
+
+      // 1. Có cả SNAPSHOT và REFERENCE -> chỉ gửi đúng 1 ảnh (ưu tiên SNAPSHOT)
+      const resBoth = await ctx.service.dispatchPpeViolationAlert("chat-1", {
+        incidentId: "11111111-1111-4111-8111-111111111114",
+        violationType: "NO_HELMET",
+        severity: "CRITICAL",
+        evidenceUrl: snapshotPath,
+        referenceEvidenceUrl: referencePath,
+      });
+      assert.equal(resBoth.method, "sendPhoto");
+      assert.equal(ctx.fetchedUrls.length, 1);
+      assert.equal(ctx.fetchedUrls[0], snapshotPath);
+      assert.equal(ctx.sentPhotoBuffers.length, 1);
+
+      // 2. Chỉ có REFERENCE -> fallback dùng referenceEvidenceUrl
+      const resRefOnly = await ctx.service.dispatchPpeViolationAlert("chat-1", {
+        incidentId: "11111111-1111-4111-8111-111111111115",
+        violationType: "NO_VEST",
+        severity: "HIGH",
+        referenceEvidenceUrl: referencePath,
+      });
+      assert.equal(resRefOnly.method, "sendPhoto");
+      assert.equal(ctx.fetchedUrls.at(-1), referencePath);
+      assert.equal(ctx.sentPhotoBuffers.length, 2);
+
+      // 3. Fetcher trả về null -> fallback về sendMessage
+      ctx.setNextEvidenceAsset(null);
+      const resNullAsset = await ctx.service.dispatchPpeViolationAlert("chat-1", {
+        incidentId: "11111111-1111-4111-8111-111111111116",
+        violationType: "NO_HELMET",
+        severity: "HIGH",
+        evidenceUrl: snapshotPath,
+      });
+      assert.equal(resNullAsset.method, "sendMessage");
+      assert.equal(resNullAsset.fallbackFromPhoto, true);
+    });
+
+    it("createInternalEvidenceFetcher enforces incidentId query, redirect:error, raster MIME allowlist, pre-read Content-Length cap, and safe filename decoding", async () => {
+      const incidentId = "22222222-2222-4222-8222-222222222222";
+      const evidencePath = "/api/v1/evidences/11111111-1111-4111-8111-111111111111/download-url";
+      const origIncidentUrl = (envConfig.incident as { serviceUrl: string }).serviceUrl;
+      const origInternalToken = (envConfig.internalService as { token: string }).token;
+      (envConfig.incident as { serviceUrl: string }).serviceUrl = "http://incident-service:8893";
+      (envConfig.internalService as { token: string }).token = "internal_test_token_1234567890123456";
+
+      try {
+        const requests: Array<{ url: string; init?: RequestInit }> = [];
+        let mode: "ok" | "svg" | "oversizedHeader" | "badFilename" = "ok";
+        let arrayBufferCalled = 0;
+
+        const fetcher = createInternalEvidenceFetcher((async (input: string | URL, init?: RequestInit) => {
+          requests.push({ url: String(input), init });
+          if (mode === "svg") {
+            return new Response("<svg/>", {
+              status: 200,
+              headers: { "content-type": "image/svg+xml" },
+            });
+          }
+          if (mode === "oversizedHeader") {
+            return {
+              ok: true,
+              status: 200,
+              headers: new Headers({
+                "content-type": "image/jpeg",
+                "content-length": String(10 * 1024 * 1024 + 1),
+              }),
+              body: { cancel: async () => {} },
+              arrayBuffer: async () => {
+                arrayBufferCalled++;
+                return new ArrayBuffer(0);
+              },
+            } as unknown as Response;
+          }
+          if (mode === "badFilename") {
+            return new Response(Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]), {
+              status: 200,
+              headers: {
+                "content-type": "image/png",
+                "x-evidence-filename": "%E0%A4%A",
+              },
+            });
+          }
+          return new Response(Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]), {
+            status: 200,
+            headers: {
+              "content-type": "image/jpeg",
+              "x-evidence-filename": encodeURIComponent("../dir/cam01 snap.jpg"),
+            },
+          });
+        }) as typeof fetch);
+
+        // 1. Fail-closed khi thiếu incidentId
+        assert.equal(await fetcher(evidencePath), null);
+        assert.equal(requests.length, 0);
+
+        // 2. Thành công: truyền ?incidentId=..., redirect: error, sanitize filename
+        const okAsset = await fetcher(evidencePath, incidentId);
+        assert.ok(okAsset);
+        assert.equal(requests[0].init?.redirect, "error");
+        assert.ok(requests[0].url.includes(`incidentId=${incidentId}`));
+        assert.equal(okAsset.fileName, "cam01 snap.jpg");
+        assert.equal(okAsset.mimeType, "image/jpeg");
+
+        // 3. Từ chối image/svg+xml
+        mode = "svg";
+        assert.equal(await fetcher(evidencePath, incidentId), null);
+
+        // 4. Từ chối Content-Length > 10MB trước khi gọi arrayBuffer()
+        mode = "oversizedHeader";
+        assert.equal(await fetcher(evidencePath, incidentId), null);
+        assert.equal(arrayBufferCalled, 0);
+
+        // 5. Header x-evidence-filename malformed fallback về evidence.jpg thay vì làm rơi ảnh
+        mode = "badFilename";
+        const fallbackNameAsset = await fetcher(evidencePath, incidentId);
+        assert.ok(fallbackNameAsset);
+        assert.equal(fallbackNameAsset.fileName, "evidence.jpg");
+      } finally {
+        (envConfig.incident as { serviceUrl: string }).serviceUrl = origIncidentUrl;
+        (envConfig.internalService as { token: string }).token = origInternalToken;
+      }
     });
 
     it("/status reports ĐANG TẮT when preference is null, GROUP /unlink blocks non-owner, and re-linking disables previous user's preference", async () => {
@@ -823,6 +1018,63 @@ describe("Zalo Bot Platform Integration Suite (ZALO_BOT)", () => {
       );
       assert.equal(zaloRows.length, 1);
       assert.equal(zaloRows[0].userId, userBoundEnabled);
+    });
+
+    it("preloads internal evidence asset once across multiple bound Zalo recipients in dispatchIncidentNotification", async () => {
+      const user1 = "019447e1-ffff-7000-8000-000000000001";
+      const user2 = "019447e1-ffff-7000-8000-000000000002";
+      const sharedAsset = {
+        buffer: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+        mimeType: "image/jpeg",
+        fileName: "shared.jpg",
+      };
+      let preloadCalls = 0;
+      const dispatchedPayloads: any[] = [];
+
+      const service = new NotificationService(
+        {
+          createManyNotifications: async (rows: any[]) => ({ count: rows.length }),
+          findPreferencesByUserIds: async () => [
+            { userId: user1, channel: NOTIFICATION_CHANNEL.ZALO_BOT, enabled: true, severityThreshold: NOTIFICATION_SEVERITY.HIGH },
+            { userId: user2, channel: NOTIFICATION_CHANNEL.ZALO_BOT, enabled: true, severityThreshold: NOTIFICATION_SEVERITY.HIGH },
+          ],
+        } as any,
+        { sendPpeViolationAlertEmail: async () => {} } as any,
+        { sendToUser: () => {} } as any,
+        undefined,
+        { getIncidentById: async (id: string) => ({ id, siteId: "019447e1-cccc-7000-8000-000000000002" }) },
+        { getIncidentRecipients: async () => [] },
+        { isFeatureEnabled: async () => true },
+        {
+          findBindingByUserId: async () => null,
+          findBindingsByUserIds: async () => [
+            { id: "b1", userId: user1, chatId: "chat-1", chatType: "PRIVATE", zaloUserId: "z1", displayName: "U1", linkedAt: new Date(), updatedAt: new Date() },
+            { id: "b2", userId: user2, chatId: "chat-2", chatType: "PRIVATE", zaloUserId: "z2", displayName: "U2", linkedAt: new Date(), updatedAt: new Date() },
+          ],
+          preloadEvidenceAsset: async () => {
+            preloadCalls++;
+            return sharedAsset;
+          },
+          dispatchPpeViolationAlert: async (chatId: string, data: any) => {
+            dispatchedPayloads.push({ chatId, data });
+            return { method: "sendPhoto" as const, messageId: `m-${chatId}` };
+          },
+          dispatchGenericMessage: async () => ({ method: "sendMessage" as const }),
+        },
+      );
+
+      await service.dispatchIncidentNotification({
+        incidentId: "019447e1-dddd-7000-8000-000000000099",
+        violationType: "NO_HELMET",
+        severity: NOTIFICATION_SEVERITY.CRITICAL,
+        evidenceUrl: "/api/v1/evidences/11111111-1111-4111-8111-111111111111/download-url",
+        recipientUserIds: [user1, user2],
+      });
+
+      assert.equal(preloadCalls, 1, "Must fetch internal evidence asset once per incident dispatch");
+      assert.equal(dispatchedPayloads.length, 2);
+      assert.strictEqual(dispatchedPayloads[0].data.preloadedAsset, sharedAsset);
+      assert.strictEqual(dispatchedPayloads[1].data.preloadedAsset, sharedAsset);
     });
 
     it("send() dispatches ZALO_BOT message when user has binding", async () => {

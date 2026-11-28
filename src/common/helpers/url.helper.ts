@@ -156,7 +156,7 @@ export interface SafeEvidenceUrlOptions extends SafeRedirectOptions {
 }
 
 const INTERNAL_EVIDENCE_DOWNLOAD_PATH_REGEX =
-  /^\/api\/v1\/(?:incidents\/evidences|evidences)\/[A-Za-z0-9_-]{8,128}\/download$/;
+  /^\/api\/v1\/(?:incidents\/evidences|evidences)\/([A-Za-z0-9_-]{8,128})\/download(?:-url)?$/;
 
 /**
  * Kiểm tra đường dẫn tương đối tới API tải bằng chứng nội bộ của chính Gateway/Incident Service.
@@ -168,6 +168,15 @@ export function isSafeInternalEvidencePath(urlString: string): boolean {
   if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return false;
   if (trimmed.includes("..") || trimmed.includes("\\")) return false;
   return INTERNAL_EVIDENCE_DOWNLOAD_PATH_REGEX.test(trimmed);
+}
+
+/**
+ * Trích xuất evidenceId từ đường dẫn tải bằng chứng nội bộ hợp lệ (`/api/v1/evidences/:id/download-url` hoặc `/download`).
+ */
+export function extractInternalEvidenceId(urlString: string): string | null {
+  if (!isSafeInternalEvidencePath(urlString)) return null;
+  const match = INTERNAL_EVIDENCE_DOWNLOAD_PATH_REGEX.exec(urlString.trim());
+  return match?.[1] || null;
 }
 
 /**

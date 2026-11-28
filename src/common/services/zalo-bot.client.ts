@@ -364,6 +364,83 @@ export class ZaloBotClient {
     });
   }
 
+  /**
+   * Tải ảnh trực tiếp dạng multipart/form-data lên Zalo Bot API /sendPhoto
+   * (dùng khi ảnh bằng chứng nằm trong mạng nội bộ / MinIO không public HTTPS).
+   */
+  async sendPhotoBuffer(params: {
+    chatId: string;
+    photoBuffer: Buffer;
+    fileName?: string;
+    mimeType?: string;
+    caption?: string;
+  }): Promise<ZaloMessageResult> {
+    const token = this.getToken();
+    if (!token) {
+      throw new ZaloBotApiError(
+        "Zalo Bot Token chưa được cấu hình (ZALO_BOT_TOKEN)",
+        503,
+      );
+    }
+
+    const url = `${this.getApiBaseUrl()}/bot${token}/sendPhoto`;
+    const form = new FormData();
+    form.append("chat_id", params.chatId);
+    if (params.caption && params.caption.trim()) {
+      form.append(
+        "caption",
+        truncateZaloText(params.caption, ZALO_MAX_TEXT_LENGTH),
+      );
+    }
+    const mimeType = params.mimeType || "image/jpeg";
+    const fileName = params.fileName || "evidence.jpg";
+    form.append(
+      "photo",
+      new Blob([new Uint8Array(params.photoBuffer)], { type: mimeType }),
+      fileName,
+    );
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+        },
+        body: form,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (error: any) {
+      const safeMsg = redactBotToken(error?.message || String(error), token);
+      throw new ZaloBotApiError(
+        `Không thể kết nối tới Zalo Bot API (sendPhoto multipart): ${safeMsg}`,
+        503,
+      );
+    }
+
+    let body: ZaloApiEnvelope<ZaloMessageResult> | null = null;
+    try {
+      body = (await response.json()) as ZaloApiEnvelope<ZaloMessageResult>;
+    } catch {
+      body = null;
+    }
+
+    if (!response.ok || !body || body.ok === false) {
+      const zaloCode = body?.error_code ?? body?.errorCode ?? response.status;
+      const desc = redactBotToken(
+        body?.description || `HTTP ${response.status}`,
+        token,
+      );
+      throw new ZaloBotApiError(
+        `Zalo Bot API lỗi (sendPhoto) [${zaloCode}]: ${desc}`,
+        response.status >= 400 ? response.status : 502,
+        zaloCode,
+      );
+    }
+
+    return body.result as ZaloMessageResult;
+  }
+
   async setWebhook(params: {
     url: string;
     secretToken: string;

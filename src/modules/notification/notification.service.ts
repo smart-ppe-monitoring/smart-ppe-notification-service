@@ -34,6 +34,7 @@ import {
   zaloBotService,
   DispatchZaloResult,
   PpeViolationZaloPayload,
+  ZaloEvidenceAsset,
 } from "../zalo-bot/zalo-bot.service";
 import { UserZaloBindingRecord } from "../zalo-bot/zalo-bot.repository";
 import {
@@ -91,6 +92,11 @@ export interface ZaloBotDispatcher {
   isConfigured?(): boolean;
   findBindingByUserId(userId: string): Promise<UserZaloBindingRecord | null>;
   findBindingsByUserIds(userIds: string[]): Promise<UserZaloBindingRecord[]>;
+  preloadEvidenceAsset?(data: {
+    incidentId: string;
+    evidenceUrl?: string;
+    referenceEvidenceUrl?: string;
+  }): Promise<ZaloEvidenceAsset | null>;
   dispatchPpeViolationAlert(
     chatId: string,
     data: PpeViolationZaloPayload,
@@ -540,6 +546,22 @@ export class NotificationService {
       }
     }
 
+    // 4c. Tải trước ảnh bằng chứng nội bộ đúng 1 lần cho toàn bộ người nhận Zalo trong đợt phát cảnh báo
+    let preloadedZaloAsset: ZaloEvidenceAsset | null | undefined;
+    if (
+      zaloBindingMap.size > 0 &&
+      this.zaloBot.preloadEvidenceAsset &&
+      (dto.evidenceUrl || dto.referenceEvidenceUrl)
+    ) {
+      preloadedZaloAsset = await this.zaloBot
+        .preloadEvidenceAsset({
+          incidentId: dto.incidentId,
+          evidenceUrl: dto.evidenceUrl,
+          referenceEvidenceUrl: dto.referenceEvidenceUrl,
+        })
+        .catch(() => null);
+    }
+
     // 5. Lặp qua từng người nhận và áp dụng Preferences
     for (const userId of recipientIds) {
       const user = userMap.get(userId);
@@ -669,6 +691,8 @@ export class NotificationService {
             siteName: dto.siteName,
             detectedAt: dto.detectedAt,
             evidenceUrl: dto.evidenceUrl,
+            referenceEvidenceUrl: dto.referenceEvidenceUrl,
+            preloadedAsset: preloadedZaloAsset,
             description: dto.description,
           })
           .catch((err) => {
