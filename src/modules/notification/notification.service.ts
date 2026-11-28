@@ -31,6 +31,12 @@ import { mailService, MailService } from "../../common/services/mail.service";
 import { sseManagerService, SseManagerService } from "../../common/services/sse-manager.service";
 import { EmailTemplateService } from "../../common/services/email-template.service";
 import {
+  zaloBotService,
+  DispatchZaloResult,
+  PpeViolationZaloPayload,
+} from "../zalo-bot/zalo-bot.service";
+import { UserZaloBindingRecord } from "../zalo-bot/zalo-bot.repository";
+import {
   systemConfigCacheService,
   SystemConfigCacheService,
 } from "../../common/services/system-config-cache.service";
@@ -43,6 +49,8 @@ import {
   isTrustedMinioEvidenceUrl,
 } from "../../common/helpers/url.helper";
 import { isUuid } from "../../common/helpers/uuid.helper";
+import { isAutomatedTestRuntime } from "../../common/helpers/runtime.helper";
+import { redactBotToken } from "../../common/services/zalo-bot.client";
 import { GATEWAY_HEADERS } from "../../common/constants/gateway.constant";
 import { ROLES } from "../../common/constants/role.constant";
 import {
@@ -79,12 +87,26 @@ export interface IdentityClient {
   getIncidentRecipients(siteId?: string): Promise<IdentityRecipient[]>;
 }
 
-export function isAutomatedTestRuntime(): boolean {
-  return (
-    process.env.NODE_ENV === "test" ||
-    Boolean(process.env.NODE_TEST_CONTEXT)
-  );
+export interface ZaloBotDispatcher {
+  isConfigured?(): boolean;
+  findBindingByUserId(userId: string): Promise<UserZaloBindingRecord | null>;
+  findBindingsByUserIds(userIds: string[]): Promise<UserZaloBindingRecord[]>;
+  dispatchPpeViolationAlert(
+    chatId: string,
+    data: PpeViolationZaloPayload,
+  ): Promise<DispatchZaloResult>;
+  dispatchGenericMessage(
+    chatId: string,
+    params: {
+      title: string;
+      content: string;
+      severity?: string;
+      actionUrl?: string;
+    },
+  ): Promise<DispatchZaloResult>;
 }
+
+export { isAutomatedTestRuntime };
 
 const IDENTITY_RECIPIENTS_CACHE_TTL_MS = 30_000;
 const identityRecipientsCache = new Map<
@@ -221,6 +243,7 @@ export class NotificationService {
     SystemConfigCacheService,
     "isFeatureEnabled"
   >;
+  private readonly zaloBot: ZaloBotDispatcher;
 
   constructor(
     repository?: NotificationRepository,
@@ -230,6 +253,7 @@ export class NotificationService {
     incidentClient?: IncidentClient,
     identityClient?: IdentityClient,
     systemConfigCache?: Pick<SystemConfigCacheService, "isFeatureEnabled">,
+    zaloBot?: ZaloBotDispatcher,
   ) {
     this.repository = repository || notificationRepository;
     this.mail = mail || mailService;
@@ -239,6 +263,7 @@ export class NotificationService {
     this.incidentClient = incidentClient || defaultIncidentClient;
     this.identityClient = identityClient || defaultIdentityClient;
     this.systemConfigCache = systemConfigCache || systemConfigCacheService;
+    this.zaloBot = zaloBot || zaloBotService;
   }
 
   private async isNotificationsEnabled(): Promise<boolean> {
@@ -494,6 +519,27 @@ export class NotificationService {
     // 4. Lấy cấu hình nhận thông báo hàng loạt cho toàn bộ người nhận (Chống N+1 query)
     const userPrefMap = await this.loadUserPreferenceMap(recipientIds);
 
+    // 4b. Tải hàng loạt liên kết Zalo Bot cho những người nhận đã bật kênh ZALO_BOT và đạt ngưỡng severity
+    const zaloEligibleUserIds: string[] = [];
+    for (const userId of recipientIds) {
+      const prefMap = userPrefMap.get(userId) || new Map();
+      const zaloPref = prefMap.get(NOTIFICATION_CHANNEL.ZALO_BOT);
+      const zaloEnabled = zaloPref ? zaloPref.enabled : false;
+      const zaloThreshold = (zaloPref?.severityThreshold ||
+        NOTIFICATION_SEVERITY.HIGH) as NotificationSeverity;
+      const zaloThresholdWeight = SEVERITY_WEIGHT[zaloThreshold] || 3;
+      if (zaloEnabled && severityWeight >= zaloThresholdWeight) {
+        zaloEligibleUserIds.push(userId);
+      }
+    }
+    const zaloBindingMap = new Map<string, UserZaloBindingRecord>();
+    if (zaloEligibleUserIds.length > 0) {
+      const bindings = await this.zaloBot.findBindingsByUserIds(zaloEligibleUserIds);
+      for (const b of bindings) {
+        zaloBindingMap.set(b.userId, b);
+      }
+    }
+
     // 5. Lặp qua từng người nhận và áp dụng Preferences
     for (const userId of recipientIds) {
       const user = userMap.get(userId);
@@ -587,6 +633,47 @@ export class NotificationService {
           .catch((err) => {
             console.warn(
               `[NotificationService] Không thể gửi email cảnh báo PPE tới ${user.email}:`,
+              err?.message || err,
+            );
+          });
+      }
+
+      // ── Kênh 3: Zalo Bot Alert ──
+      const zaloBinding = zaloBindingMap.get(userId);
+      if (zaloBinding?.chatId) {
+        notificationsToCreate.push({
+          userId,
+          incidentId: dto.incidentId,
+          templateId: null,
+          channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+          title,
+          content,
+          severity,
+          status: NOTIFICATION_STATUS.SENT,
+          sentAt: new Date(),
+        });
+        dispatchedResult.push({
+          id: dto.incidentId,
+          userId,
+          channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+          status: NOTIFICATION_STATUS.SENT,
+        });
+        usedChannels.add(NOTIFICATION_CHANNEL.ZALO_BOT);
+
+        this.zaloBot
+          .dispatchPpeViolationAlert(zaloBinding.chatId, {
+            incidentId: dto.incidentId,
+            violationType: dto.violationType,
+            severity,
+            cameraCode: dto.cameraCode,
+            siteName: dto.siteName,
+            detectedAt: dto.detectedAt,
+            evidenceUrl: dto.evidenceUrl,
+            description: dto.description,
+          })
+          .catch((err) => {
+            console.warn(
+              `[NotificationService] Không thể gửi cảnh báo PPE qua Zalo Bot cho user ${userId}:`,
               err?.message || err,
             );
           });
@@ -890,11 +977,23 @@ export class NotificationService {
   ): Promise<NotificationPreferenceDto> {
     if (!new Set<string>(SUPPORTED_PREFERENCE_CHANNELS).has(dto.channel)) {
       throw new AppError(
-        "Kênh cấu hình thông báo cá nhân chỉ hỗ trợ IN_APP và EMAIL",
+        "Kênh cấu hình thông báo cá nhân chỉ hỗ trợ IN_APP, EMAIL và ZALO_BOT",
         400,
         ERROR_CODE.VALIDATION_ERROR,
       );
     }
+
+    if (dto.channel === NOTIFICATION_CHANNEL.ZALO_BOT && dto.enabled) {
+      const binding = await this.zaloBot.findBindingByUserId(userId);
+      if (!binding) {
+        throw new AppError(
+          "Vui lòng liên kết tài khoản Zalo Bot trước khi bật nhận thông báo qua Zalo",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
+      }
+    }
+
     return this.repository.upsertPreference(
       userId,
       dto.channel,
@@ -930,9 +1029,8 @@ export class NotificationService {
     const uniqueUserIds = Array.from(new Set(userIds || []));
     const uniqueChannels = Array.from(new Set(channels || []));
 
-    // SEC-27: Chặn việc đánh dấu SENT giả mạo đối với các kênh chưa được triển khai (ZALO_ZNS, WEBHOOK)
+    // SEC-27: Chặn việc đánh dấu SENT giả mạo đối với kênh chưa được triển khai (WEBHOOK)
     const UNIMPLEMENTED_CHANNELS = new Set([
-      NOTIFICATION_CHANNEL.ZALO_ZNS,
       NOTIFICATION_CHANNEL.WEBHOOK,
     ]);
     const unimplemented = uniqueChannels.filter((c) =>
@@ -944,6 +1042,35 @@ export class NotificationService {
         400,
         ERROR_CODE.BAD_REQUEST,
       );
+    }
+
+    // SEC-27: Đối với kênh ZALO_BOT, bắt buộc cấu hình bot (trên production) và người dùng phải liên kết Zalo Bot trước khi dispatch
+    const zaloBindingMap = new Map<string, UserZaloBindingRecord>();
+    if (uniqueChannels.includes(NOTIFICATION_CHANNEL.ZALO_BOT)) {
+      if (
+        envConfig.nodeEnv === "production" &&
+        this.zaloBot.isConfigured &&
+        !this.zaloBot.isConfigured()
+      ) {
+        throw new AppError(
+          "Dịch vụ Zalo Bot chưa được cấu hình trên môi trường production",
+          503,
+          ERROR_CODE.CONFIGURATION_ERROR,
+        );
+      }
+      const bindings = await this.zaloBot.findBindingsByUserIds(uniqueUserIds);
+      for (const b of bindings) {
+        zaloBindingMap.set(b.userId, b);
+      }
+      for (const userId of uniqueUserIds) {
+        if (!zaloBindingMap.has(userId)) {
+          throw new AppError(
+            `Kênh ZALO_BOT yêu cầu người dùng ${userId} đã liên kết tài khoản Zalo Bot`,
+            400,
+            ERROR_CODE.VALIDATION_ERROR,
+          );
+        }
+      }
     }
 
     // SEC-27: Đối với kênh EMAIL, phải đảm bảo có địa chỉ email người nhận hợp lệ trước khi dispatch
@@ -1013,6 +1140,30 @@ export class NotificationService {
           if (email) {
             const html = this.emailTemplateService.baseLayout(title, content);
             await this.mail.sendRaw(email, title, html);
+          }
+        }
+      }
+
+      if (uniqueChannels.includes(NOTIFICATION_CHANNEL.ZALO_BOT)) {
+        for (const userId of uniqueUserIds) {
+          const binding = zaloBindingMap.get(userId);
+          if (binding?.chatId) {
+            try {
+              await this.zaloBot.dispatchGenericMessage(binding.chatId, {
+                title,
+                content,
+                severity,
+                actionUrl: dto.actionUrl,
+              });
+            } catch (err: any) {
+              if (uniqueUserIds.length === 1) {
+                throw err;
+              }
+              console.warn(
+                `[NotificationService] Không thể gửi tin nhắn Zalo Bot tới user ${userId}:`,
+                redactBotToken(err?.message || String(err)),
+              );
+            }
           }
         }
       }

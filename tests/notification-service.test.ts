@@ -36,7 +36,7 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
       assert.equal(NOTIFICATION_CHANNEL.IN_APP, "IN_APP");
       assert.equal(NOTIFICATION_CHANNEL.WEB, "WEB");
       assert.equal(NOTIFICATION_CHANNEL.EMAIL, "EMAIL");
-      assert.equal(NOTIFICATION_CHANNEL.ZALO_ZNS, "ZALO_ZNS");
+      assert.equal(NOTIFICATION_CHANNEL.ZALO_BOT, "ZALO_BOT");
       assert.equal(NOTIFICATION_CHANNEL.WEBHOOK, "WEBHOOK");
     });
 
@@ -61,9 +61,10 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
     });
 
     it("should provide sensible default preferences for new safety officers", () => {
-      assert.equal(DEFAULT_PREFERENCES.length, 2);
+      assert.equal(DEFAULT_PREFERENCES.length, 3);
       const inAppDef = DEFAULT_PREFERENCES.find((p) => p.channel === NOTIFICATION_CHANNEL.IN_APP);
       const emailDef = DEFAULT_PREFERENCES.find((p) => p.channel === NOTIFICATION_CHANNEL.EMAIL);
+      const zaloDef = DEFAULT_PREFERENCES.find((p) => p.channel === NOTIFICATION_CHANNEL.ZALO_BOT);
 
       assert.ok(inAppDef);
       assert.equal(inAppDef.enabled, true);
@@ -72,6 +73,10 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
       assert.ok(emailDef);
       assert.equal(emailDef.enabled, true);
       assert.equal(emailDef.severityThreshold, NOTIFICATION_SEVERITY.HIGH);
+
+      assert.ok(zaloDef);
+      assert.equal(zaloDef.enabled, false);
+      assert.equal(zaloDef.severityThreshold, NOTIFICATION_SEVERITY.HIGH);
     });
   });
 

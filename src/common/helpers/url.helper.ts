@@ -1,4 +1,7 @@
 import dns from "node:dns";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import { AppError } from "../errors/app-error";
 import { ERROR_CODE } from "../errors/error-code";
 
@@ -18,17 +21,31 @@ export function isPrivateOrReservedIp(ip: string): boolean {
   if (!ip || typeof ip !== "string") return true;
 
   const trimmed = ip.trim().toLowerCase();
+  const clean =
+    trimmed.startsWith("[") && trimmed.endsWith("]")
+      ? trimmed.slice(1, -1)
+      : trimmed;
 
-  // ── Xử lý IPv4-mapped IPv6 (e.g., "::ffff:127.0.0.1", "::ffff:10.0.0.1") ──
-  if (trimmed.startsWith("::ffff:")) {
-    const mappedIpv4 = trimmed.slice(7);
-    if (mappedIpv4.includes(".")) {
-      return isPrivateOrReservedIp(mappedIpv4);
-    }
+  // ── Xử lý IPv4-mapped / IPv4-compatible / NAT64 IPv6 (cả dạng dotted lẫn hex sau chuẩn hóa URL) ──
+  const dottedEmbedded = clean.match(
+    /^(?:::ffff:|(?:0+:){5}ffff:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/i,
+  );
+  if (dottedEmbedded) {
+    return isPrivateOrReservedIp(dottedEmbedded[1]);
+  }
+
+  const hexEmbedded = clean.match(
+    /^(?:::ffff:|(?:0+:){5}ffff:|::|64:ff9b::|::ffff:0:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i,
+  );
+  if (hexEmbedded) {
+    const hi = parseInt(hexEmbedded[1], 16);
+    const lo = parseInt(hexEmbedded[2], 16);
+    const mappedIpv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    return isPrivateOrReservedIp(mappedIpv4);
   }
 
   // ── IPv4 Check ──
-  const ipv4Parts = trimmed.split(".");
+  const ipv4Parts = clean.split(".");
   if (ipv4Parts.length === 4 && ipv4Parts.every((p) => /^\d+$/.test(p))) {
     const [a, b, c, d] = ipv4Parts.map(Number);
     if (
@@ -70,24 +87,21 @@ export function isPrivateOrReservedIp(ip: string): boolean {
   }
 
   // ── IPv6 Check ──
-  const ipv6Clean =
-    trimmed.startsWith("[") && trimmed.endsWith("]")
-      ? trimmed.slice(1, -1)
-      : trimmed;
-
-  if (ipv6Clean.includes(":")) {
+  if (clean.includes(":")) {
     // Loopback ::1
-    if (ipv6Clean === "::1" || ipv6Clean === "0:0:0:0:0:0:0:1") return true;
+    if (clean === "::1" || clean === "0:0:0:0:0:0:0:1") return true;
     // Unspecified ::
-    if (ipv6Clean === "::" || ipv6Clean === "0:0:0:0:0:0:0:0") return true;
+    if (clean === "::" || clean === "0:0:0:0:0:0:0:0") return true;
+    // Discard-Only 100::/64, NAT64 64:ff9b::/96, SIIT ::ffff:0:/96
+    if (/^(?:100::|64:ff9b::|::ffff:0:)/i.test(clean)) return true;
     // ULA fc00::/7 — bắt đầu bằng fc hoặc fd
-    if (/^f[cd]/i.test(ipv6Clean)) return true;
+    if (/^f[cd]/i.test(clean)) return true;
     // Link-local fe80::/10 — bắt đầu bằng fe8, fe9, fea, feb
-    if (/^fe[89ab]/i.test(ipv6Clean)) return true;
+    if (/^fe[89ab]/i.test(clean)) return true;
     // Multicast ff00::/8 — bắt đầu bằng ff
-    if (/^ff/i.test(ipv6Clean)) return true;
+    if (/^ff/i.test(clean)) return true;
     // Documentation 2001:db8::/32
-    if (/^2001:0?db8/i.test(ipv6Clean)) return true;
+    if (/^2001:0?db8/i.test(clean)) return true;
 
     return false;
   }
@@ -101,7 +115,8 @@ export function isPrivateOrReservedIp(ip: string): boolean {
 export function isPrivateOrReservedHost(hostname: string): boolean {
   if (!hostname) return true;
 
-  const host = hostname.toLowerCase().trim();
+  const host = hostname.toLowerCase().trim().replace(/\.+$/, "");
+  if (!host) return true;
 
   // Loopback and well-known local names
   if (host === "localhost" || host === "0.0.0.0") return true;
@@ -210,6 +225,7 @@ export function isPublicHttpUrl(
   try {
     const parsed = new URL(urlString);
     if (!["http:", "https:"].includes(parsed.protocol)) return false;
+    if (parsed.username || parsed.password) return false;
 
     const allowPrivate =
       options.allowPrivate ?? process.env.NODE_ENV !== "production";
@@ -363,6 +379,68 @@ export interface SafeRedirectResult {
   reason?: string;
 }
 
+async function sendPinnedHeadRequest(
+  targetUrl: URL,
+  pinnedIp: string | undefined,
+  timeoutMs: number,
+): Promise<{ status: number; locationHeader?: string }> {
+  const isHttps = targetUrl.protocol === "https:";
+  const transport = isHttps ? https : http;
+  const cleanPinned = pinnedIp
+    ? pinnedIp.replace(/^\[|\]$/g, "")
+    : "";
+  const ipFamily = cleanPinned ? net.isIP(cleanPinned) : 0;
+
+  const pinnedLookup =
+    ipFamily === 4 || ipFamily === 6
+      ? (
+          _hostname: string,
+          opts: any,
+          cb?: (
+            err: NodeJS.ErrnoException | null,
+            address: any,
+            family?: number,
+          ) => void,
+        ) => {
+          const callback = typeof opts === "function" ? opts : cb;
+          if (!callback) return;
+          if (opts && typeof opts === "object" && opts.all) {
+            callback(null, [{ address: cleanPinned, family: ipFamily }]);
+            return;
+          }
+          callback(null, cleanPinned, ipFamily);
+        }
+      : undefined;
+
+  return new Promise((resolve, reject) => {
+    const req = transport.request(
+      {
+        protocol: targetUrl.protocol,
+        hostname: targetUrl.hostname.replace(/^\[|\]$/g, ""),
+        port: targetUrl.port || (isHttps ? 443 : 80),
+        path: `${targetUrl.pathname}${targetUrl.search}`,
+        method: "HEAD",
+        ...(pinnedLookup ? { lookup: pinnedLookup as any } : {}),
+        ...(isHttps ? { servername: targetUrl.hostname } : {}),
+      },
+      (res) => {
+        res.resume();
+        const loc = res.headers.location;
+        resolve({
+          status: res.statusCode ?? 0,
+          locationHeader: Array.isArray(loc) ? loc[0] : loc,
+        });
+      },
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+    });
+    req.on("error", (err) => reject(err));
+    req.end();
+  });
+}
+
 /**
  * Kiểm tra an toàn toàn diện chuỗi URL và các bước chuyển hướng HTTP Redirect.
  *
@@ -460,20 +538,13 @@ export async function resolveSafeRedirectChain(
         const loc = res.headers["location"] || res.headers["Location"];
         locationHeader = Array.isArray(loc) ? loc[0] : loc;
       } else {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-          const res = await fetch(currentUrl, {
-            method: "HEAD",
-            redirect: "manual",
-            signal: controller.signal,
-          });
-          status = res.status;
-          locationHeader = res.headers.get("location") || undefined;
-        } finally {
-          clearTimeout(timeoutId);
-        }
+        const res = await sendPinnedHeadRequest(
+          parsed,
+          dnsResult.ips[0],
+          timeoutMs,
+        );
+        status = res.status;
+        locationHeader = res.locationHeader;
       }
     } catch (err: any) {
       return {

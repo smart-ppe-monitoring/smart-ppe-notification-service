@@ -737,9 +737,9 @@ export function registerNotificationOpenApi(): void {
     method: "put",
     path: "/notifications/preferences",
     tags: ["Notification Preferences"],
-    summary: "Cập nhật cấu hình kênh nhận thông báo cá nhân (chỉ hỗ trợ IN_APP và EMAIL)",
+    summary: "Cập nhật cấu hình kênh nhận thông báo cá nhân (IN_APP, EMAIL, ZALO_BOT)",
     description:
-      "Cập nhật trạng thái bật/tắt và ngưỡng mức độ nghiêm trọng cho kênh thông báo cá nhân. Chỉ hỗ trợ 2 kênh IN_APP và EMAIL; các kênh khác như WEBHOOK, ZALO_ZNS, WEB sẽ bị từ chối.",
+      "Cập nhật trạng thái bật/tắt và ngưỡng mức độ nghiêm trọng cho kênh thông báo cá nhân. Hỗ trợ 3 kênh IN_APP, EMAIL và ZALO_BOT; các kênh chưa triển khai như WEBHOOK, WEB sẽ bị từ chối.",
     security: [{ BearerAuth: [] }],
     request: {
       body: {
@@ -763,7 +763,7 @@ export function registerNotificationOpenApi(): void {
       },
       422: {
         description:
-          "Kênh thông báo không được hỗ trợ (chỉ chấp nhận IN_APP hoặc EMAIL)",
+          "Kênh thông báo không được hỗ trợ (chỉ chấp nhận IN_APP, EMAIL hoặc ZALO_BOT)",
       },
     },
   });

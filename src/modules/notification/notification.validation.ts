@@ -10,6 +10,7 @@ import {
 import { getVietnamDayRange } from "../../common/helpers/date.helper";
 import { envConfig } from "../../config/env.config";
 import {
+  ALL_NOTIFICATION_CHANNELS,
   NOTIFICATION_CHANNEL,
   NOTIFICATION_SEVERITY,
   NOTIFICATION_STATUS,
@@ -53,7 +54,7 @@ export const listNotificationsSchema = z.object({
   status: z.enum(["PENDING", "SENT", "FAILED", "READ"]).optional(),
   severity: z.enum(["LOW", "NORMAL", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
   channel: z
-    .enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"])
+    .enum(ALL_NOTIFICATION_CHANNELS)
     .optional(),
   incidentId: z.string().uuid("Invalid incident ID").optional(),
   type: z.string().optional(),
@@ -126,7 +127,7 @@ export const dispatchIncidentNotificationSchema = z.object({
     .array(z.string().uuid("Mã người dùng không hợp lệ"))
     .optional(),
   channels: z
-    .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
+    .array(z.enum(ALL_NOTIFICATION_CHANNELS))
     .optional(),
   recipientEmails: z.union([z.record(z.string().email()), z.array(z.string().email())]).optional(),
   recipientUsers: z.array(z.object({ id: z.string().uuid(), email: z.string().email().optional() })).optional(),
@@ -161,7 +162,7 @@ export const dispatchIncidentCommentNotificationSchema = z.object({
 export const updateNotificationPreferenceSchema = z.object({
   channel: z.enum(SUPPORTED_PREFERENCE_CHANNELS, {
     errorMap: () => ({
-      message: "Kênh cấu hình thông báo cá nhân chỉ hỗ trợ IN_APP và EMAIL",
+      message: "Kênh cấu hình thông báo cá nhân chỉ hỗ trợ IN_APP, EMAIL và ZALO_BOT",
     }),
   }),
   enabled: z.boolean({ required_error: "Trạng thái bật/tắt enabled là bắt buộc" }),
@@ -180,7 +181,7 @@ export const sendNotificationSchema = z.object({
     .array(z.string().uuid("Invalid user ID"))
     .min(1, "At least one userId is required"),
   channels: z
-    .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
+    .array(z.enum(ALL_NOTIFICATION_CHANNELS))
     .min(1, "At least one channel is required"),
   title: z.string().min(1, "Title is required").max(255, "Title must not exceed 255 characters"),
   content: z.string().min(1, "Content is required"),
@@ -268,7 +269,7 @@ export const createNotificationTemplateSchema = z.object({
     ),
   name: z.string().min(1, "Name is required").max(150, "Name must not exceed 150 characters"),
   channel: z
-    .enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"])
+    .enum(ALL_NOTIFICATION_CHANNELS)
     .default("IN_APP"),
   subjectTemplate: z.string().nullable().optional(),
   contentTemplate: z.string().min(1, "contentTemplate cannot be empty").optional(),
@@ -276,7 +277,7 @@ export const createNotificationTemplateSchema = z.object({
   // Các trường tương thích ngược
   description: z.string().max(500).optional(),
   channels: z
-    .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
+    .array(z.enum(ALL_NOTIFICATION_CHANNELS))
     .optional(),
   subject: z.string().optional(),
   title: z.string().max(255).optional(),
@@ -294,7 +295,7 @@ export const createNotificationTemplateSchema = z.object({
 export const updateNotificationTemplateSchema = z.object({
   name: z.string().min(1, "Name is required").max(150, "Name must not exceed 150 characters").optional(),
   channel: z
-    .enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"])
+    .enum(ALL_NOTIFICATION_CHANNELS)
     .optional(),
   subjectTemplate: z.string().nullable().optional(),
   contentTemplate: z.string().min(1, "contentTemplate cannot be empty").optional(),
@@ -302,7 +303,7 @@ export const updateNotificationTemplateSchema = z.object({
   // Các trường tương thích ngược
   description: z.string().max(500).optional(),
   channels: z
-    .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
+    .array(z.enum(ALL_NOTIFICATION_CHANNELS))
     .optional(),
   subject: z.string().optional(),
   title: z.string().optional(),
@@ -314,7 +315,7 @@ export const updateNotificationTemplateSchema = z.object({
 export const listNotificationTemplatesSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  channel: z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]).optional(),
+  channel: z.enum(ALL_NOTIFICATION_CHANNELS).optional(),
   status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
   isActive: z
     .string()
@@ -333,6 +334,6 @@ export const testSendNotificationTemplateSchema = z.object({
   toEmail: z.string().email("Invalid email address").optional(),
   variables: z.record(z.unknown()).default({}),
   channels: z
-    .array(z.enum(["IN_APP", "WEB", "EMAIL", "ZALO_ZNS", "WEBHOOK"]))
+    .array(z.enum(ALL_NOTIFICATION_CHANNELS))
     .optional(),
 });

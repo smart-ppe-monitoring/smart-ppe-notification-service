@@ -23,12 +23,13 @@ import { updateNotificationPreferenceSchema } from "../src/modules/notification/
 import { NotificationService } from "../src/modules/notification/notification.service";
 import { NotificationRepository } from "../src/modules/notification/notification.repository";
 
-describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => {
+describe("Issue #3 + Zalo Bot: Restrict Notification Preferences to IN_APP, EMAIL & ZALO_BOT", () => {
   describe("1. Zod Validation Schema (updateNotificationPreferenceSchema)", () => {
-    it("accepts IN_APP and EMAIL channels", () => {
+    it("accepts IN_APP, EMAIL, and ZALO_BOT channels", () => {
       assert.deepStrictEqual(SUPPORTED_PREFERENCE_CHANNELS, [
         NOTIFICATION_CHANNEL.IN_APP,
         NOTIFICATION_CHANNEL.EMAIL,
+        NOTIFICATION_CHANNEL.ZALO_BOT,
       ]);
 
       const inAppRes = updateNotificationPreferenceSchema.safeParse({
@@ -44,12 +45,18 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
         severityThreshold: NOTIFICATION_SEVERITY.HIGH,
       });
       assert.strictEqual(emailRes.success, true);
+
+      const zaloRes = updateNotificationPreferenceSchema.safeParse({
+        channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+        enabled: true,
+        severityThreshold: NOTIFICATION_SEVERITY.HIGH,
+      });
+      assert.strictEqual(zaloRes.success, true);
     });
 
-    it("rejects WEBHOOK, ZALO_ZNS, and WEB channels with validation error", () => {
+    it("rejects WEBHOOK and WEB channels with validation error", () => {
       for (const unsupported of [
         NOTIFICATION_CHANNEL.WEBHOOK,
-        NOTIFICATION_CHANNEL.ZALO_ZNS,
         NOTIFICATION_CHANNEL.WEB,
       ]) {
         const res = updateNotificationPreferenceSchema.safeParse({
@@ -70,7 +77,7 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
   });
 
   describe("2. NotificationService Defense-in-Depth & Filtering", () => {
-    it("getUserPreferences filters out legacy WEBHOOK/ZALO_ZNS/WEB rows and merges defaults without DB mutation", async () => {
+    it("getUserPreferences filters out legacy WEBHOOK/WEB rows and merges defaults without DB mutation", async () => {
       let upsertCalled = false;
       const userId = "019447e1-9999-7000-8000-000000000111";
       const mockRepo = {
@@ -94,15 +101,6 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
             updatedAt: new Date("2026-10-01T00:00:00.000Z"),
           },
           {
-            id: "pref-legacy-zalo",
-            userId,
-            channel: NOTIFICATION_CHANNEL.ZALO_ZNS,
-            enabled: true,
-            severityThreshold: NOTIFICATION_SEVERITY.HIGH,
-            createdAt: new Date("2026-10-01T00:00:00.000Z"),
-            updatedAt: new Date("2026-10-01T00:00:00.000Z"),
-          },
-          {
             id: "pref-legacy-web",
             userId,
             channel: NOTIFICATION_CHANNEL.WEB,
@@ -122,10 +120,14 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
       const prefs = await service.getUserPreferences(userId);
 
       assert.strictEqual(upsertCalled, false);
-      assert.strictEqual(prefs.length, 2);
+      assert.strictEqual(prefs.length, 3);
       assert.deepStrictEqual(
         prefs.map((p) => p.channel).sort(),
-        [NOTIFICATION_CHANNEL.EMAIL, NOTIFICATION_CHANNEL.IN_APP],
+        [
+          NOTIFICATION_CHANNEL.EMAIL,
+          NOTIFICATION_CHANNEL.IN_APP,
+          NOTIFICATION_CHANNEL.ZALO_BOT,
+        ],
       );
 
       const inApp = prefs.find((p) => p.channel === NOTIFICATION_CHANNEL.IN_APP);
@@ -135,9 +137,13 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
       const email = prefs.find((p) => p.channel === NOTIFICATION_CHANNEL.EMAIL);
       assert.strictEqual(email?.enabled, true);
       assert.strictEqual(email?.severityThreshold, NOTIFICATION_SEVERITY.HIGH);
+
+      const zalo = prefs.find((p) => p.channel === NOTIFICATION_CHANNEL.ZALO_BOT);
+      assert.strictEqual(zalo?.enabled, false);
+      assert.strictEqual(zalo?.severityThreshold, NOTIFICATION_SEVERITY.HIGH);
     });
 
-    it("updateUserPreference rejects unsupported channels with 400 VALIDATION_ERROR and allows IN_APP/EMAIL", async () => {
+    it("updateUserPreference rejects unsupported channels, blocks enabling ZALO_BOT without binding, and allows IN_APP/EMAIL/bound ZALO_BOT", async () => {
       let upsertCalls = 0;
       const userId = "019447e1-9999-7000-8000-000000000112";
       const mockRepo = {
@@ -160,11 +166,39 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
         },
       } as unknown as NotificationRepository;
 
-      const service = new NotificationService(mockRepo);
+      let bound = false;
+      const mockZaloBot = {
+        findBindingByUserId: async () =>
+          bound
+            ? {
+                id: "b1",
+                userId,
+                chatId: "chat-1",
+                chatType: "PRIVATE",
+                zaloUserId: "u1",
+                displayName: "Tester",
+                linkedAt: new Date(),
+                updatedAt: new Date(),
+              }
+            : null,
+        findBindingsByUserIds: async () => [],
+        dispatchPpeViolationAlert: async () => ({ method: "mock" as const }),
+        dispatchGenericMessage: async () => ({ method: "mock" as const }),
+      };
+
+      const service = new NotificationService(
+        mockRepo,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        mockZaloBot,
+      );
 
       for (const unsupported of [
         NOTIFICATION_CHANNEL.WEBHOOK,
-        NOTIFICATION_CHANNEL.ZALO_ZNS,
         NOTIFICATION_CHANNEL.WEB,
       ]) {
         await assert.rejects(
@@ -180,19 +214,50 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
             err.code === ERROR_CODE.VALIDATION_ERROR,
         );
       }
+
+      // Chặn bật ZALO_BOT nếu chưa liên kết
+      await assert.rejects(
+        () =>
+          service.updateUserPreference(userId, {
+            channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+            enabled: true,
+            severityThreshold: NOTIFICATION_SEVERITY.HIGH,
+          }),
+        (err: any) =>
+          err instanceof AppError &&
+          err.statusCode === 400 &&
+          err.code === ERROR_CODE.VALIDATION_ERROR,
+      );
       assert.strictEqual(upsertCalls, 0);
+
+      // Cho phép tắt ZALO_BOT ngay cả khi chưa liên kết
+      const disabledZalo = await service.updateUserPreference(userId, {
+        channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+        enabled: false,
+        severityThreshold: NOTIFICATION_SEVERITY.CRITICAL,
+      });
+      assert.strictEqual(disabledZalo.enabled, false);
+
+      // Cho phép bật ZALO_BOT khi đã liên kết
+      bound = true;
+      const enabledZalo = await service.updateUserPreference(userId, {
+        channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+        enabled: true,
+        severityThreshold: NOTIFICATION_SEVERITY.HIGH,
+      });
+      assert.strictEqual(enabledZalo.enabled, true);
 
       const saved = await service.updateUserPreference(userId, {
         channel: NOTIFICATION_CHANNEL.EMAIL,
         enabled: false,
         severityThreshold: NOTIFICATION_SEVERITY.CRITICAL,
       });
-      assert.strictEqual(upsertCalls, 1);
+      assert.strictEqual(upsertCalls, 3);
       assert.strictEqual(saved.channel, NOTIFICATION_CHANNEL.EMAIL);
       assert.strictEqual(saved.enabled, false);
     });
 
-    it("send() regression: continues blocking WEBHOOK and ZALO_ZNS with 400 BAD_REQUEST (SEC-27)", async () => {
+    it("send() regression: continues blocking WEBHOOK with 400 BAD_REQUEST (SEC-27)", async () => {
       const service = new NotificationService(
         {} as unknown as NotificationRepository,
         {} as any,
@@ -329,7 +394,7 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
       await notificationPrisma.$disconnect().catch(() => {});
     });
 
-    it("GET /preferences omits legacy WEBHOOK row and returns only IN_APP & EMAIL; PUT /preferences rejects unsupported channels and accepts EMAIL", async (t) => {
+    it("GET /preferences omits legacy WEBHOOK row and returns IN_APP, EMAIL & ZALO_BOT; PUT /preferences rejects unsupported channels and accepts EMAIL", async (t) => {
       if (!dbAvailable) {
         t.skip("PostgreSQL ppe_notification_db is unavailable");
         return;
@@ -342,15 +407,18 @@ describe("Issue #3: Restrict Notification Preferences to IN_APP & EMAIL", () => 
       );
       assert.strictEqual(getRes.status, 200);
       assert.strictEqual(getRes.body.success, true);
-      assert.strictEqual(getRes.body.data.length, 2);
+      assert.strictEqual(getRes.body.data.length, 3);
       assert.deepStrictEqual(
         (getRes.body.data as any[]).map((p) => p.channel).sort(),
-        [NOTIFICATION_CHANNEL.EMAIL, NOTIFICATION_CHANNEL.IN_APP],
+        [
+          NOTIFICATION_CHANNEL.EMAIL,
+          NOTIFICATION_CHANNEL.IN_APP,
+          NOTIFICATION_CHANNEL.ZALO_BOT,
+        ],
       );
 
       for (const unsupported of [
         NOTIFICATION_CHANNEL.WEBHOOK,
-        NOTIFICATION_CHANNEL.ZALO_ZNS,
         NOTIFICATION_CHANNEL.WEB,
       ]) {
         const putBadRes = await requestJson(

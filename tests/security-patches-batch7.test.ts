@@ -82,11 +82,10 @@ describe("Security Audit Patches - Batch 7 (SEC-26, SEC-27, SEC-28, SEC-29)", ()
   });
 
   describe("SEC-27: Non-SSE Multi-Channel Dispatch Validation", () => {
-    it("should REJECT send() if channels include unimplemented ZALO_ZNS or WEBHOOK", async () => {
+    it("should REJECT send() if channels include unimplemented WEBHOOK", async () => {
       const invalidChannelsList = [
-        [NOTIFICATION_CHANNEL.ZALO_ZNS],
         [NOTIFICATION_CHANNEL.WEBHOOK],
-        [NOTIFICATION_CHANNEL.IN_APP, NOTIFICATION_CHANNEL.ZALO_ZNS],
+        [NOTIFICATION_CHANNEL.IN_APP, NOTIFICATION_CHANNEL.WEBHOOK],
       ];
 
       for (const channels of invalidChannelsList) {
@@ -108,6 +107,43 @@ describe("Security Audit Patches - Batch 7 (SEC-26, SEC-27, SEC-28, SEC-29)", ()
           `Should reject unimplemented channels: ${channels.join(", ")}`,
         );
       }
+    });
+
+    it("should REJECT send() with ZALO_BOT channel if recipient has no Zalo binding", async () => {
+      const mockZaloBot = {
+        findBindingByUserId: async () => null,
+        findBindingsByUserIds: async () => [],
+        dispatchPpeViolationAlert: async () => ({ method: "mock" as const }),
+        dispatchGenericMessage: async () => ({ method: "mock" as const }),
+      };
+      const svc = new (notificationService.constructor as any)(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { isFeatureEnabled: async () => true },
+        mockZaloBot,
+      );
+
+      await assert.rejects(
+        async () => {
+          await svc.send({
+            userIds: ["a0000000-0000-0000-0000-000000000003"],
+            channels: [NOTIFICATION_CHANNEL.ZALO_BOT],
+            title: "Zalo Alert",
+            content: "Zalo Content",
+          });
+        },
+        (err: any) => {
+          assert.equal(err instanceof AppError, true);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          return true;
+        },
+        "Should require Zalo binding when ZALO_BOT channel is requested",
+      );
     });
 
     it("should REJECT send() with EMAIL channel if recipient email is missing", async () => {

@@ -186,6 +186,21 @@ const envSchema = z
     SECURITY_CONTACT_EMAIL: z.string().default("security@example.com"),
     SECURITY_POLICY_URL: z.string().default(""),
     SECURITY_ACKNOWLEDGMENTS_URL: z.string().default(""),
+
+    // ── Zalo Bot Platform ─────────────────────────────────────────────────────
+    ZALO_BOT_TOKEN: z.string().default(""),
+    ZALO_BOT_MODE: z.enum(["disabled", "polling", "webhook"]).default("disabled"),
+    ZALO_BOT_WEBHOOK_SECRET: z.string().default(""),
+    ZALO_BOT_API_BASE_URL: z
+      .string()
+      .default("https://bot-api.zaloplatforms.com"),
+    ZALO_BOT_POLLING_TIMEOUT_S: z.coerce
+      .number()
+      .int()
+      .min(5)
+      .max(60)
+      .default(30),
+    ZALO_BOT_ACCOUNT_NAME: z.string().default(""),
   })
   // ── Production-only Constraints ───────────────────────────────────────────
   .refine(
@@ -328,6 +343,18 @@ const envSchema = z
       message:
         "INTERNAL_SERVICE_TOKEN phải có độ dài tối thiểu 32 ký tự và không dùng giá trị mẫu trong môi trường production",
       path: ["INTERNAL_SERVICE_TOKEN"],
+    },
+  )
+  .refine(
+    (env) => {
+      if (env.NODE_ENV !== "production") return true;
+      if (env.ZALO_BOT_MODE !== "webhook") return true;
+      return env.ZALO_BOT_WEBHOOK_SECRET.trim().length >= 16;
+    },
+    {
+      message:
+        "ZALO_BOT_WEBHOOK_SECRET phải có độ dài tối thiểu 16 ký tự khi ZALO_BOT_MODE=webhook trong môi trường production",
+      path: ["ZALO_BOT_WEBHOOK_SECRET"],
     },
   );
 
@@ -545,5 +572,13 @@ export const envConfig = {
     contactEmail: _env.SECURITY_CONTACT_EMAIL,
     policyUrl: _env.SECURITY_POLICY_URL,
     acknowledgmentsUrl: _env.SECURITY_ACKNOWLEDGMENTS_URL,
+  },
+  zaloBot: {
+    token: _env.ZALO_BOT_TOKEN,
+    mode: _env.ZALO_BOT_MODE,
+    webhookSecret: _env.ZALO_BOT_WEBHOOK_SECRET,
+    apiBaseUrl: _env.ZALO_BOT_API_BASE_URL,
+    pollingTimeoutSeconds: _env.ZALO_BOT_POLLING_TIMEOUT_S,
+    accountName: _env.ZALO_BOT_ACCOUNT_NAME,
   },
 } as const;

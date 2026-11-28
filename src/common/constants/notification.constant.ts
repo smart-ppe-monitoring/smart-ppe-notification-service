@@ -43,9 +43,17 @@ export const NOTIFICATION_CHANNEL = {
   IN_APP: "IN_APP",
   WEB: "WEB",
   EMAIL: "EMAIL",
-  ZALO_ZNS: "ZALO_ZNS",
+  ZALO_BOT: "ZALO_BOT",
   WEBHOOK: "WEBHOOK",
 } as const;
+
+export const ALL_NOTIFICATION_CHANNELS = [
+  NOTIFICATION_CHANNEL.IN_APP,
+  NOTIFICATION_CHANNEL.WEB,
+  NOTIFICATION_CHANNEL.EMAIL,
+  NOTIFICATION_CHANNEL.ZALO_BOT,
+  NOTIFICATION_CHANNEL.WEBHOOK,
+] as const;
 
 export type NotificationChannel = keyof typeof NOTIFICATION_CHANNEL;
 
@@ -128,6 +136,7 @@ export const DEFAULT_EMAIL_SUBJECTS: Record<string, string> = {
 export const SUPPORTED_PREFERENCE_CHANNELS = [
   NOTIFICATION_CHANNEL.IN_APP,
   NOTIFICATION_CHANNEL.EMAIL,
+  NOTIFICATION_CHANNEL.ZALO_BOT,
 ] as const;
 
 export type SupportedPreferenceChannel =
@@ -144,5 +153,39 @@ export const DEFAULT_PREFERENCES = [
     enabled: true,
     severityThreshold: NOTIFICATION_SEVERITY.HIGH,
   },
+  {
+    channel: NOTIFICATION_CHANNEL.ZALO_BOT,
+    enabled: false,
+    severityThreshold: NOTIFICATION_SEVERITY.HIGH,
+  },
 ] as const;
+
+export const ZALO_CHAT_TYPE = {
+  PRIVATE: "PRIVATE",
+  GROUP: "GROUP",
+} as const;
+
+export type ZaloChatType = keyof typeof ZALO_CHAT_TYPE;
+
+export const ZALO_BOT_MODE = {
+  DISABLED: "disabled",
+  POLLING: "polling",
+  WEBHOOK: "webhook",
+} as const;
+
+export type ZaloBotMode = (typeof ZALO_BOT_MODE)[keyof typeof ZALO_BOT_MODE];
+
+export const ZALO_BOT_EVENT = {
+  MESSAGE_TEXT: "message.text.received",
+  MESSAGE_IMAGE: "message.image.received",
+  MESSAGE_STICKER: "message.sticker.received",
+  MESSAGE_VOICE: "message.voice.received",
+  MESSAGE_UNSUPPORTED: "message.unsupported.received",
+} as const;
+
+export type ZaloBotEvent = (typeof ZALO_BOT_EVENT)[keyof typeof ZALO_BOT_EVENT];
+
+export const ZALO_LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
+export const ZALO_MAX_TEXT_LENGTH = 2000;
+export const ZALO_WEBHOOK_SECRET_HEADER = "x-bot-api-secret-token";
 

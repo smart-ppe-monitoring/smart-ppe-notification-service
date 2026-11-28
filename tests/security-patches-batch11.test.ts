@@ -162,7 +162,7 @@ describe("Security Audit Patches - Batch 11 (SEC-42, SEC-43, SEC-44)", () => {
       const preferences = await service.getUserPreferences("user-existing-1");
 
       assert.equal(upsertCallCount, 0, "No database writes must occur when merging partial preferences");
-      assert.equal(preferences.length, 2);
+      assert.equal(preferences.length, DEFAULT_PREFERENCES.length);
 
       const emailPref = preferences.find((p) => p.channel === NOTIFICATION_CHANNEL.EMAIL);
       assert.ok(emailPref);

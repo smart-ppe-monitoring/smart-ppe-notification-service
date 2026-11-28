@@ -115,3 +115,28 @@ model OutboxEvent {
   @@map("outbox_events")
 }
 
+model UserZaloBinding {
+  id          String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId      String   @unique @map("user_id") @db.Uuid
+  chatId      String   @unique @map("chat_id") @db.VarChar(128)
+  chatType    String   @default("PRIVATE") @map("chat_type") @db.VarChar(20)
+  zaloUserId  String?  @map("zalo_user_id") @db.VarChar(128)
+  displayName String?  @map("display_name") @db.VarChar(150)
+  linkedAt    DateTime @default(now()) @map("linked_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("user_zalo_bindings")
+}
+
+model ZaloLinkToken {
+  id        String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  codeHash  String    @unique @map("code_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, expiresAt])
+  @@map("zalo_link_tokens")
+}
+

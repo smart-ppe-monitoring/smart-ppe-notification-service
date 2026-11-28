@@ -3,6 +3,10 @@ import { Prisma } from "@prisma/client-notification";
 import { ZodError } from "zod";
 import { AppError } from "../common/errors/app-error";
 import { ERROR_CODE } from "../common/errors/error-code";
+import {
+  ZaloBotApiError,
+  redactBotToken,
+} from "../common/services/zalo-bot.client";
 
 export function notFoundMiddleware(
   req: Request,
@@ -54,6 +58,29 @@ export function errorMiddleware(
       }
     }
     res.status(error.statusCode).json(payload);
+    return;
+  }
+
+  if (error instanceof ZaloBotApiError) {
+    const status =
+      error.statusCode === 400
+        ? 400
+        : error.statusCode === 429
+          ? 429
+          : error.statusCode === 503
+            ? 503
+            : 502;
+    const code =
+      status === 400
+        ? ERROR_CODE.BAD_REQUEST
+        : status === 429
+          ? ERROR_CODE.RATE_LIMIT_EXCEEDED
+          : ERROR_CODE.SERVICE_UNAVAILABLE;
+    res.status(status).json({
+      success: false,
+      message: redactBotToken(error.message),
+      code,
+    });
     return;
   }
 

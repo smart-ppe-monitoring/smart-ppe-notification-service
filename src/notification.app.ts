@@ -8,6 +8,7 @@ import {
   notFoundMiddleware,
 } from "./middlewares/error.middleware";
 import notificationRoute from "./modules/notification/notification.route";
+import { zaloBotRouter, zaloWebhookRouter } from "./modules/zalo-bot/zalo-bot.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import {
   requestIdMiddleware,
@@ -17,9 +18,11 @@ import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
 import { buildOpenApiSpec } from "./config/openapi/openapi.registry";
 import { registerNotificationOpenApi } from "./modules/notification/notification.openapi";
+import { registerZaloBotOpenApi } from "./modules/zalo-bot/zalo-bot.openapi";
 
 // Khởi tạo các định nghĩa OpenAPI
 registerNotificationOpenApi();
+registerZaloBotOpenApi();
 
 /**
  * Express Application cho Notification Microservice (Phase 5: First Satellite Service)
@@ -107,7 +110,33 @@ if (envConfig.nodeEnv !== "production") {
   notificationApp.get("/api/v1/notifications/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
 }
 
-// 4. Mount Notification Routes (dual-mount hỗ trợ cả prefix /api/v1/notifications và /notifications)
+// 4. Mount Zalo Bot Routes (Webhook public tách riêng khỏi prefix /zalo để không trừ 2 lần rate limit)
+notificationApp.use(
+  "/api/v1/notifications/zalo/webhook",
+  rateLimitMiddleware,
+  zaloWebhookRouter,
+);
+notificationApp.use(
+  "/notifications/zalo/webhook",
+  rateLimitMiddleware,
+  zaloWebhookRouter,
+);
+notificationApp.use(
+  "/api/v1/notifications/zalo",
+  requireGatewayOrigin,
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  zaloBotRouter,
+);
+notificationApp.use(
+  "/notifications/zalo",
+  requireGatewayOrigin,
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  zaloBotRouter,
+);
+
+// 5. Mount Notification Routes (dual-mount hỗ trợ cả prefix /api/v1/notifications và /notifications)
 // SEC-33: Gắn requireGatewayOrigin để bảo vệ API perimeter trước các truy cập nội bộ bỏ qua Traefik API Gateway
 notificationApp.use(
   "/api/v1/notifications",
@@ -124,7 +153,7 @@ notificationApp.use(
   notificationRoute,
 );
 
-// 5. Error handling middlewares
+// 6. Error handling middlewares
 notificationApp.use(notFoundMiddleware);
 notificationApp.use(errorMiddleware);
 

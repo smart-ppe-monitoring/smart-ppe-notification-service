@@ -12,6 +12,7 @@ import notificationApp from "./notification.app";
 import { envConfig } from "./config/env.config";
 import { emailWorker } from "./common/workers/email-worker";
 import { outboxWorker } from "./common/workers/outbox.worker";
+import { zaloBotPollingWorker } from "./common/workers/zalo-bot-polling.worker";
 import { EventBusWorker } from "./common/workers/event-bus.worker";
 import { EVENT_BUS_CONSTANTS } from "./common/constants/event.constant";
 import { notificationSubscriber } from "./common/subscribers/notification.subscriber";
@@ -49,14 +50,15 @@ export const server = notificationApp.listen(PORT, async () => {
   // 1. Đăng ký subscriber lắng nghe events từ Auth & Core services
   notificationSubscriber.register();
 
-  // 2. Khởi chạy EventBus workers, Outbox worker và Email worker
+  // 2. Khởi chạy EventBus workers, Outbox worker, Email worker và Zalo Bot Polling worker
   notificationEventBusWorker.start();
   backboneEventBusWorker.start();
   outboxWorker.start();
   emailWorker.start();
+  zaloBotPollingWorker.start();
 
   console.log(
-    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker, BackboneEventBusWorker, OutboxWorker and EmailWorker are active.",
+    "[Notification Service] ✅ NotificationSubscriber, NotificationEventBusWorker, BackboneEventBusWorker, OutboxWorker, EmailWorker and ZaloBotPollingWorker are active.",
   );
 });
 
@@ -104,12 +106,13 @@ export async function handleNotificationShutdown(
     // 3. Stop background workers
     await Promise.allSettled([
       emailWorker.stop(),
+      zaloBotPollingWorker.stop(),
       notificationEventBusWorker.stop(),
       backboneEventBusWorker.stop(),
       outboxWorker.stop(),
     ]);
     console.log(
-      "[Notification Service] EmailWorker, EventBusWorkers & OutboxWorker stopped.",
+      "[Notification Service] EmailWorker, ZaloBotPollingWorker, EventBusWorkers & OutboxWorker stopped.",
     );
 
     // 4. Close SSE connections, SystemConfigCache & EventBus
